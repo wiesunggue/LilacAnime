@@ -1,26 +1,22 @@
-# Subtitle stability + desktop parity patch
+# Subtitle runtime v2 + desktop parity work
 
-This patch set focuses on the Android subtitle/translation pipeline.
+The subtitle/translation fixes are now implemented directly in the Android Kotlin sources instead of being injected only by a CI-time Python patch.
 
-## Stability fixes
+## Runtime v2 fixes
 
-- Apply the normal subtitle-size setting to the in-memory libass translation overlay.
-- Prevent HTML/WebVTT markup such as `<font>` from leaking into ASS/libass output.
-- Do not consume translated events before the overlay renderer is ready.
-- Resume translation prefetch correctly after backward seeks and after prefetch is re-enabled.
-- Give each prepared translation session a fresh mutex so a cancelled blocking cloud request cannot stall the next episode until its old timeout expires.
-- Hide the source subtitle before switching into Korean translation mode to avoid a short original-subtitle flash.
-- Improve non-UTF-8 subtitle decoding and English ASS translation support.
-- Decode UTF-16 remote subtitle BOMs before format sniffing.
-- Fix WebVTT short timestamp sync handling and synced-file cache collisions.
-- Preserve VTT line breaks/entities when converting to ASS.
-- Detect remote subtitle formats instead of saving every unknown response as VTT.
+- `LibassTranslationOverlay` reads the persisted normal subtitle-size setting and applies it through `AssRender.setFontScale()` while translated subtitles are rendered.
+- The overlay deduplicates translated events itself, so the translator can re-offer completed events until the AndroidView/libass renderer is ready. Translation cues are no longer lost because of view creation timing.
+- Switching subtitle sessions or returning to original subtitles clears the active translated overlay so stale translated events cannot remain on screen.
+- `RealtimeSubtitleTranslator` resolves the actual external subtitle path currently used by mpv before falling back to `localSubtitle`.
+- Subtitle format detection prefers strong content signatures over cached/downloaded file extensions, including old files mislabeled as VTT.
+- UTF-8, UTF-16, Shift_JIS and EUC-KR decoding is handled for translation parsing and libass header loading.
+- ASS translation now accepts any subtitle line containing letters rather than Japanese-only lines.
+- Backward seeking rewinds the translation prefetch cursor; toggling prefetch back on no longer requires a new subtitle session.
+- Each subtitle session gets its own translation mutex so a cancelled blocking cloud request cannot stall the next episode.
+- Raw model-emitted HTML/ASS tags are sanitized before translated text is sent to libass; original ASS override tags are restored separately.
 
-## Desktop parity
+## Desktop parity work
 
-- Claude/Anthropic translation provider with encrypted API-key storage.
-- Claude model discovery/selection in AI settings.
-- Claude participates in cloud-provider fallback.
-- Optional desktop-style removal of short SFX/speaker labels before AI translation.
+Desktop parity features such as Claude/Anthropic support remain staged separately. They are not injected into the runtime-v2 verification build until subtitle size and realtime translation are stable.
 
-CI applies the patch scripts and builds an ARM64 debug APK for verification.
+CI now builds the direct Kotlin sources without applying the old patch scripts.
