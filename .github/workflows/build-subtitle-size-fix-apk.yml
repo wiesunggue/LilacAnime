@@ -43,6 +43,9 @@ jobs:
           if [ -f .github/scripts/apply_desktop_parity.py ]; then
             python3 .github/scripts/apply_desktop_parity.py
           fi
+          if [ -f .github/scripts/apply_player_followup_fixes.py ]; then
+            python3 .github/scripts/apply_player_followup_fixes.py
+          fi
 
       - name: Generate Gradle build files from current module configuration
         shell: bash
