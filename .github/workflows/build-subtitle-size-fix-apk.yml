@@ -157,6 +157,12 @@ jobs:
 
               buildFeatures { compose = true }
 
+              packaging {
+                  jniLibs {
+                      pickFirsts += "**/libc++_shared.so"
+                  }
+              }
+
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
