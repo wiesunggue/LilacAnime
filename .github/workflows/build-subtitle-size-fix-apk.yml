@@ -1,4 +1,4 @@
-name: Build subtitle stability APK
+name: Build subtitle runtime v2 APK
 
 on:
   pull_request:
@@ -36,16 +36,12 @@ jobs:
         with:
           gradle-version: '9.0.0'
 
-      - name: Apply subtitle and player stability fixes
+      - name: Verify direct subtitle runtime fixes are present
         shell: bash
         run: |
-          python3 .github/scripts/apply_stability_fixes.py
-          if [ -f .github/scripts/apply_desktop_parity.py ]; then
-            python3 .github/scripts/apply_desktop_parity.py
-          fi
-          if [ -f .github/scripts/apply_player_followup_fixes.py ]; then
-            python3 .github/scripts/apply_player_followup_fixes.py
-          fi
+          grep -q 'persistedSubtitleScale' app/src/main/kotlin/com/lilac/anime/player/LibassTranslationOverlay.kt
+          grep -q 'currentEngineOrNull' app/src/main/kotlin/com/lilac/anime/player/MpvPlaybackManager.kt
+          grep -q 'non-destructive' app/src/main/kotlin/com/lilac/anime/data/subtitle/translation/RealtimeSubtitleTranslator.kt
 
       - name: Generate Gradle build files from current module configuration
         shell: bash
@@ -98,8 +94,8 @@ jobs:
                   applicationId = "com.lilac.anime"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 31
-                  versionName = "0.4.1-alpha-3-stability"
+                  versionCode = 32
+                  versionName = "0.4.1-alpha-3-subtitle-runtime-v2"
 
                   ndk {
                       abiFilters += "arm64-v8a"
@@ -184,13 +180,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-0.4.1-alpha-3-stability-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-subtitle-runtime-v2-debug.apk
           ls -lh artifacts/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LilacAnime-stability-debug
-          path: artifacts/LilacAnime-0.4.1-alpha-3-stability-debug.apk
+          name: LilacAnime-subtitle-runtime-v2-debug
+          path: artifacts/LilacAnime-subtitle-runtime-v2-debug.apk
           if-no-files-found: error
           retention-days: 7
