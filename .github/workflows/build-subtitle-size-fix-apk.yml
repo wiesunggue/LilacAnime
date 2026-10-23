@@ -1,4 +1,4 @@
-name: Build translated subtitle size fix APK
+name: Build subtitle stability APK
 
 on:
   pull_request:
@@ -36,53 +36,9 @@ jobs:
         with:
           gradle-version: '9.0.0'
 
-      - name: Apply translated subtitle size fix
+      - name: Apply subtitle and player stability fixes
         shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("app/src/main/kotlin/com/lilac/anime/player/LibassTranslationOverlay.kt")
-          s = p.read_text(encoding="utf-8")
-          old = "    private var videoTop = 0\n    private var videoWidthPx = 0\n    private var videoHeightPx = 0\n"
-          new = old + "    private var subtitleScale = 1.0f\n"
-          if old not in s:
-              raise SystemExit("LibassTranslationOverlay geometry insertion point not found")
-          s = s.replace(old, new, 1)
-
-          old = "    fun setSource(path: String?) {"
-          new = """    fun setSubtitleScale(percent: Float) {
-              val scale = (percent / 100f).coerceIn(0.5f, 2.0f)
-              if (kotlin.math.abs(subtitleScale - scale) < 0.001f) return
-              subtitleScale = scale
-              renderer?.let { render ->
-                  runCatching { render.setFontScale(scale) }
-                      .onFailure { Log.e(TAG, "LIBASS_SET_FONT_SCALE_FAILED scale=$scale", it) }
-              }
-              if (isReady()) scheduleRender()
-          }
-
-          fun setSource(path: String?) {"""
-          if old not in s:
-              raise SystemExit("LibassTranslationOverlay setSource insertion point not found")
-          s = s.replace(old, new, 1)
-
-          old = "            r.setStorageSize(w, h)\n            r.setFrameSize(w, h)\n"
-          new = old + "            r.setFontScale(subtitleScale)\n"
-          if old not in s:
-              raise SystemExit("LibassTranslationOverlay renderer insertion point not found")
-          s = s.replace(old, new, 1)
-          p.write_text(s, encoding="utf-8")
-
-          p = Path("app/src/main/kotlin/com/lilac/anime/player/PlayerScreen.kt")
-          s = p.read_text(encoding="utf-8")
-          old = "    var realtimeSubtitleText by remember { mutableStateOf(\"\") }\n    var libassTranslationOverlay by remember { mutableStateOf<LibassTranslationOverlay?>(null) }\n\n"
-          new = old + "    LaunchedEffect(subtitleSize, libassTranslationOverlay) {\n        libassTranslationOverlay?.setSubtitleScale(subtitleSize)\n    }\n\n"
-          if old not in s:
-              raise SystemExit("PlayerScreen overlay insertion point not found")
-          s = s.replace(old, new, 1)
-          p.write_text(s, encoding="utf-8")
-          PY
+        run: python3 .github/scripts/apply_stability_fixes.py
 
       - name: Generate Gradle build files from current module configuration
         shell: bash
@@ -135,8 +91,8 @@ jobs:
                   applicationId = "com.lilac.anime"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 30
-                  versionName = "0.4.1-alpha-3-subtitle-size-fix"
+                  versionCode = 31
+                  versionName = "0.4.1-alpha-3-stability"
 
                   ndk {
                       abiFilters += "arm64-v8a"
@@ -221,13 +177,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-0.4.1-alpha-3-subtitle-size-fix-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-0.4.1-alpha-3-stability-debug.apk
           ls -lh artifacts/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LilacAnime-subtitle-size-fix-debug
-          path: artifacts/LilacAnime-0.4.1-alpha-3-subtitle-size-fix-debug.apk
+          name: LilacAnime-stability-debug
+          path: artifacts/LilacAnime-0.4.1-alpha-3-stability-debug.apk
           if-no-files-found: error
           retention-days: 7
