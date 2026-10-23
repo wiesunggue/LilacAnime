@@ -12,6 +12,8 @@ def replace_once(path: str, old: str, new: str, label: str) -> None:
 PLAYER = "app/src/main/kotlin/com/lilac/anime/player/PlayerScreen.kt"
 REALTIME = "app/src/main/kotlin/com/lilac/anime/data/subtitle/translation/RealtimeSubtitleTranslator.kt"
 DOWNLOADER = "app/src/main/kotlin/com/lilac/anime/data/subtitle/SubtitleDownloader.kt"
+FORMAT = "app/src/main/kotlin/com/lilac/anime/data/subtitle/translation/SubtitleFormatTranslator.kt"
+AI_SETTINGS = "app/src/main/kotlin/com/lilac/anime/ui/settings/AiSettingsScreen.kt"
 
 # A cancelled cloud request uses blocking OkHttp execute(). If it is still in
 # flight while a new episode starts, a single process-wide mutex can stall the
@@ -116,5 +118,32 @@ replace_once(
 ''',
     "remote subtitle BOM decoding",
 )
+
+# The stability generator writes Kotlin code from a Python triple-quoted string.
+# Fix the escaping in the generated ASS parser so Kotlin sees literal regex
+# backslashes instead of unsupported \p / \{ / \N escape sequences.
+p = Path(FORMAT)
+s = p.read_text(encoding="utf-8")
+fixes = [
+    (r'Regex("\p{L}")', r'Regex("\\p{L}")'),
+    (r'Regex("(?s)\{[^}]*\}")', r'Regex("(?s)\\{[^}]*\\}")'),
+    (r'.replace("\N", " " )', r'.replace("\\N", " " )'),
+]
+for old_text, new_text in fixes:
+    if old_text not in s:
+        raise SystemExit(f"generated Kotlin escape hotfix not found: {old_text}")
+    s = s.replace(old_text, new_text)
+p.write_text(s, encoding="utf-8")
+
+# Desktop parity makes the provider chip row horizontally scrollable. The
+# original settings file imported verticalScroll but not horizontalScroll.
+p = Path(AI_SETTINGS)
+s = p.read_text(encoding="utf-8")
+if "import androidx.compose.foundation.horizontalScroll\n" not in s:
+    marker = "import androidx.compose.foundation.verticalScroll\n"
+    if marker not in s:
+        raise SystemExit("AiSettingsScreen scroll import insertion point not found")
+    s = s.replace(marker, marker + "import androidx.compose.foundation.horizontalScroll\n", 1)
+p.write_text(s, encoding="utf-8")
 
 print("Applied LilacAnime player/subtitle follow-up fixes successfully")
