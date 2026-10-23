@@ -38,7 +38,14 @@ jobs:
 
       - name: Apply subtitle and player stability fixes
         shell: bash
-        run: python3 .github/scripts/apply_stability_fixes.py
+        run: |
+          python3 .github/scripts/apply_stability_fixes.py
+          if [ -f .github/scripts/apply_desktop_parity.py ]; then
+            python3 .github/scripts/apply_desktop_parity.py
+          fi
+          if [ -f .github/scripts/apply_player_followup_fixes.py ]; then
+            python3 .github/scripts/apply_player_followup_fixes.py
+          fi
 
       - name: Generate Gradle build files from current module configuration
         shell: bash
