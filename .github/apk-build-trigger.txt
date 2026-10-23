@@ -1,0 +1,1 @@
+Trigger GitHub Actions build for translated subtitle size fix APK.
