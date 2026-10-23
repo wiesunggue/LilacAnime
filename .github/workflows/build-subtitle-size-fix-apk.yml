@@ -1,9 +1,9 @@
 name: Build translated subtitle size fix APK
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/translated-subtitle-size-apk
+      - main
   workflow_dispatch:
 
 jobs:
@@ -44,10 +44,7 @@ jobs:
           p = Path("app/src/main/kotlin/com/lilac/anime/player/LibassTranslationOverlay.kt")
           s = p.read_text(encoding="utf-8")
 
-          old = """    private var videoTop = 0
-              private var videoWidthPx = 0
-              private var videoHeightPx = 0
-          """.replace("              ", "")
+          old = "    private var videoTop = 0\n    private var videoWidthPx = 0\n    private var videoHeightPx = 0\n"
           new = old + "    private var subtitleScale = 1.0f\n"
           if old not in s:
               raise SystemExit("LibassTranslationOverlay geometry insertion point not found")
@@ -70,9 +67,7 @@ jobs:
               raise SystemExit("LibassTranslationOverlay setSource insertion point not found")
           s = s.replace(old, new, 1)
 
-          old = """            r.setStorageSize(w, h)
-                      r.setFrameSize(w, h)
-          """.replace("                      ", "            ")
+          old = "            r.setStorageSize(w, h)\n            r.setFrameSize(w, h)\n"
           new = old + "            r.setFontScale(subtitleScale)\n"
           if old not in s:
               raise SystemExit("LibassTranslationOverlay renderer insertion point not found")
@@ -81,15 +76,8 @@ jobs:
 
           p = Path("app/src/main/kotlin/com/lilac/anime/player/PlayerScreen.kt")
           s = p.read_text(encoding="utf-8")
-          old = """    var realtimeSubtitleText by remember { mutableStateOf("") }
-              var libassTranslationOverlay by remember { mutableStateOf<LibassTranslationOverlay?>(null) }
-
-          """.replace("              ", "")
-          new = old + """    LaunchedEffect(subtitleSize, libassTranslationOverlay) {
-              libassTranslationOverlay?.setSubtitleScale(subtitleSize)
-          }
-
-          """
+          old = "    var realtimeSubtitleText by remember { mutableStateOf(\"\") }\n    var libassTranslationOverlay by remember { mutableStateOf<LibassTranslationOverlay?>(null) }\n\n"
+          new = old + "    LaunchedEffect(subtitleSize, libassTranslationOverlay) {\n        libassTranslationOverlay?.setSubtitleScale(subtitleSize)\n    }\n\n"
           if old not in s:
               raise SystemExit("PlayerScreen overlay insertion point not found")
           s = s.replace(old, new, 1)
