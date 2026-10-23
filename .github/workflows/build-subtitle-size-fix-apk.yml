@@ -88,6 +88,12 @@ jobs:
       - name: Generate Gradle build files from current module configuration
         shell: bash
         run: |
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+          EOF
+
           cat > settings.gradle.kts <<'EOF'
           pluginManagement {
               repositories {
