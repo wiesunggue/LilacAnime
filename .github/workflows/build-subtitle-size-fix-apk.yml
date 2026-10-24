@@ -1,4 +1,4 @@
-name: Build subtitle runtime v2 APK
+name: Build subtitle runtime v3 APK
 
 on:
   pull_request:
@@ -36,12 +36,13 @@ jobs:
         with:
           gradle-version: '9.0.0'
 
-      - name: Verify direct subtitle runtime fixes are present
+      - name: Apply translated subtitle runtime v3 fix
         shell: bash
         run: |
-          grep -q 'persistedSubtitleScale' app/src/main/kotlin/com/lilac/anime/player/LibassTranslationOverlay.kt
-          grep -q 'currentEngineOrNull' app/src/main/kotlin/com/lilac/anime/player/MpvPlaybackManager.kt
-          grep -q 'non-destructive' app/src/main/kotlin/com/lilac/anime/data/subtitle/translation/RealtimeSubtitleTranslator.kt
+          python3 .github/scripts/apply_translation_runtime_fix.py
+          ! grep -q 'persistedSubtitleScale' app/src/main/kotlin/com/lilac/anime/player/LibassTranslationOverlay.kt
+          grep -q 'setSubtitleScale(subtitleSize)' app/src/main/kotlin/com/lilac/anime/player/PlayerScreen.kt
+          grep -q 'SESSION_ENSURE_REPREPARE' app/src/main/kotlin/com/lilac/anime/data/subtitle/translation/RealtimeSubtitleTranslator.kt
 
       - name: Generate Gradle build files from current module configuration
         shell: bash
@@ -94,8 +95,8 @@ jobs:
                   applicationId = "com.lilac.anime"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 32
-                  versionName = "0.4.1-alpha-3-subtitle-runtime-v2"
+                  versionCode = 33
+                  versionName = "0.4.1-alpha-3-subtitle-runtime-v3"
 
                   ndk {
                       abiFilters += "arm64-v8a"
@@ -180,13 +181,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-subtitle-runtime-v2-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-subtitle-runtime-v3-debug.apk
           ls -lh artifacts/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LilacAnime-subtitle-runtime-v2-debug
-          path: artifacts/LilacAnime-subtitle-runtime-v2-debug.apk
+          name: LilacAnime-subtitle-runtime-v3-debug
+          path: artifacts/LilacAnime-subtitle-runtime-v3-debug.apk
           if-no-files-found: error
           retention-days: 7
