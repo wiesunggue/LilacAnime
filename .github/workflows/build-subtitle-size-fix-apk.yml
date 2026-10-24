@@ -1,6 +1,9 @@
 name: Build subtitle runtime v3 APK
 
 on:
+  push:
+    branches:
+      - fix/subtitle-stability-desktop-parity
   pull_request:
     branches:
       - main
