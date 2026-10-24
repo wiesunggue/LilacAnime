@@ -26,6 +26,13 @@ object MpvPlaybackManager {
     @Volatile
     private var nextEpisodeCallback: (() -> Unit)? = null
 
+    /**
+     * Returns the engine currently owned by the player without creating a new
+     * libmpv instance. Subtitle translation uses this only to resolve the exact
+     * external subtitle file that mpv is currently rendering.
+     */
+    fun currentEngineOrNull(): MpvPlayerEngine? = sharedEngine
+
     @Synchronized
     fun engine(context: Context): MpvPlayerEngine {
         return sharedEngine ?: MpvPlayerEngine(context.applicationContext).also {
