@@ -1,22 +1,24 @@
-# Subtitle runtime v2 + desktop parity work
+# Subtitle runtime v3 + desktop parity work
 
-The subtitle/translation fixes are now implemented directly in the Android Kotlin sources instead of being injected only by a CI-time Python patch.
+The current subtitle verification build focuses on the two runtime causes reproduced after v2.
 
-## Runtime v2 fixes
+## Runtime v3 fixes
 
-- `LibassTranslationOverlay` reads the persisted normal subtitle-size setting and applies it through `AssRender.setFontScale()` while translated subtitles are rendered.
-- The overlay deduplicates translated events itself, so the translator can re-offer completed events until the AndroidView/libass renderer is ready. Translation cues are no longer lost because of view creation timing.
-- Switching subtitle sessions or returning to original subtitles clears the active translated overlay so stale translated events cannot remain on screen.
-- `RealtimeSubtitleTranslator` resolves the actual external subtitle path currently used by mpv before falling back to `localSubtitle`.
-- Subtitle format detection prefers strong content signatures over cached/downloaded file extensions, including old files mislabeled as VTT.
-- UTF-8, UTF-16, Shift_JIS and EUC-KR decoding is handled for translation parsing and libass header loading.
-- ASS translation now accepts any subtitle line containing letters rather than Japanese-only lines.
-- Backward seeking rewinds the translation prefetch cursor; toggling prefetch back on no longer requires a new subtitle session.
-- Each subtitle session gets its own translation mutex so a cancelled blocking cloud request cannot stall the next episode.
-- Raw model-emitted HTML/ASS tags are sanitized before translated text is sent to libass; original ASS override tags are restored separately.
+- Translated subtitle size no longer polls `pref_subtitle_size` from a separate SharedPreferences path. `PlayerScreen.subtitleSize` is now the single source of truth and is forwarded directly to `LibassTranslationOverlay`.
+- `LibassTranslationOverlay.setSource()` preserves the current direct font scale when libass is recreated instead of resetting it from stale persisted state.
+- `PlayerScreen` applies translated subtitle scale both when the AndroidView is created/reused and whenever the slider value changes.
+- Realtime translation no longer depends only on the one-shot Compose prepare effect. The polling loop idempotently re-prepares the translator when mpv's actual subtitle file appears after that effect.
+- The initial prepare path also prefers `engine.currentSubtitleFilePath` over a stale/null local subtitle path.
 
-## Desktop parity work
+## Existing runtime stability work
 
-Desktop parity features such as Claude/Anthropic support remain staged separately. They are not injected into the runtime-v2 verification build until subtitle size and realtime translation are stable.
+- The overlay deduplicates translated events itself, so completed events can be re-offered until AndroidView/libass is ready.
+- Switching subtitle sessions or returning to original subtitles clears stale translated events.
+- Subtitle format detection prefers content signatures over misleading file extensions.
+- UTF-8, UTF-16, Shift_JIS and EUC-KR decoding is supported in the translation path.
+- ASS translation accepts subtitle lines containing letters rather than Japanese-only lines.
+- Backward seeking rewinds translation prefetch; re-enabling prefetch does not require a new session.
+- Each subtitle session gets its own translation mutex so an old blocking cloud request cannot hold the next session.
+- Raw model-emitted HTML/ASS tags are sanitized before translated text is sent to libass.
 
-CI now builds the direct Kotlin sources without applying the old patch scripts.
+CI applies the focused runtime-v3 patch and builds a dedicated ARM64 debug APK for verification before any additional desktop-parity features are layered on top.
