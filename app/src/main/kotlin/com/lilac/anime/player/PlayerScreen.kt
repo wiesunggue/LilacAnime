@@ -69,6 +69,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -96,6 +97,11 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.key
+import androidx.compose.runtime.rememberUpdatedState
+import com.lilac.anime.core.playback.PlaybackControls
+import com.lilac.anime.core.playback.HoldToBoostController
+import com.lilac.anime.data.CollectionQuery
+import com.lilac.anime.data.PlaybackHistory
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -275,6 +281,10 @@ fun PlayerScreen(
     var seekPreview by remember { mutableFloatStateOf(0f) }
     var volume by remember { mutableFloatStateOf(100f) }
     var speed by rememberSaveable { mutableFloatStateOf(vm.playerSettings.playbackSpeed) }
+    var boostActive by remember { mutableStateOf(false) }
+    var episodePickerOpen by remember { mutableStateOf(false) }
+    var shortcutHelpOpen by remember { mutableStateOf(false) }
+    var muted by remember { mutableStateOf(false) }
     var showSkipButton by rememberSaveable { mutableStateOf(vm.playerSettings.showChapterSkipButton) }
     var autoSkip by rememberSaveable { mutableStateOf(vm.playerSettings.autoSkip) }
     var autoPlay by rememberSaveable { mutableStateOf(vm.playerSettings.autoPlay) }
@@ -748,16 +758,18 @@ fun PlayerScreen(
         }
     }
 
-    val orderedEpisodes = remember(anime.episodes) {
-        anime.episodes.sortedWith(compareBy<Episode> { it.number }.thenBy { it.displayNumber })
+    val orderedEpisodes = remember(anime.episodes, currentEpisode.id) {
+        PlaybackHistory.orderedEpisodes(anime.episodes, currentEpisode.id)
     }
 
     val currentEpisodeIndex = remember(currentEpisode.id, orderedEpisodes) {
         orderedEpisodes.indexOfFirst { it.id == currentEpisode.id }
     }
 
-    val previousEpisode = orderedEpisodes.getOrNull(currentEpisodeIndex - 1)
-    val nextEpisode = orderedEpisodes.getOrNull(currentEpisodeIndex + 1)
+    val isOffline by vm.isOffline.collectAsState()
+    fun playableEpisode(target: Episode): Boolean = target.playable && (!isOffline || vm.isEpisodeDownloaded(anime.id, target))
+    val previousEpisode = orderedEpisodes.take(currentEpisodeIndex.coerceAtLeast(0)).lastOrNull(::playableEpisode)
+    val nextEpisode = if (currentEpisodeIndex < 0) null else orderedEpisodes.drop(currentEpisodeIndex + 1).firstOrNull(::playableEpisode)
 
     fun switchEpisode(target: Episode) {
         // Ignore duplicate/late remote clicks while a target is already loading.
@@ -768,6 +780,8 @@ fun PlayerScreen(
             vm.updateProgress(context, anime.id, currentEpisode.number,
                 (engine.currentPosition.toDouble() / engine.duration).toFloat().coerceIn(0f, 1f), currentEpisode.id)
         }
+        boostActive = false
+        episodePickerOpen = false
         playbackGeneration += 1
         Log.i("MpvEpisode", "EPISODE_SWITCH_BEGIN from=${currentEpisode.displayNumber} to=${target.displayNumber} generation=$playbackGeneration")
         // Never reuse the previous foreground libmpv session for a new episode.
@@ -816,6 +830,7 @@ fun PlayerScreen(
             runCatching { engine.pause() }
         }
         engine.detachSurface()
+        boostActive = false
         MainActivity.isVideoPlaying = false
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         back()
@@ -877,6 +892,8 @@ fun PlayerScreen(
             }
         }
     }
+
+    LaunchedEffect(engine, muted) { engine.setMuted(muted) }
 
     // Keep Compose state synchronized with libmpv without making the player itself
     // depend on Compose recomposition.
@@ -1774,10 +1791,12 @@ fun PlayerScreen(
                 val stillCurrent = engine === observedEngine && currentEpisode.id == observedEpisodeId
                 val hasLoadedMedia = observedEngine.loadedLoadGeneration > 0L
                 Log.i("MpvEpisode", "EOF_EVENT episode=${currentEpisode.displayNumber} observed=$observedEpisodeId stillCurrent=$stillCurrent loaded=$hasLoadedMedia autoPlay=${vm.playerSettings.autoPlay} next=${nextEpisode?.displayNumber}")
-                if (stillCurrent && hasLoadedMedia && vm.playerSettings.autoPlay && nextEpisode != null) {
+                if (stillCurrent && hasLoadedMedia) {
                     vm.updateProgress(context, anime.id, currentEpisode.number, 1f, currentEpisode.id)
-                    switchEpisode(nextEpisode)
-                    break
+                    if (vm.playerSettings.autoPlay && nextEpisode != null) {
+                        switchEpisode(nextEpisode)
+                        break
+                    }
                 }
             }
             delay(100)
@@ -1800,6 +1819,72 @@ fun PlayerScreen(
         engine.seekTo((current.endTime * 1000.0).toLong())
     }
 
+    fun applySpeed(value: Float) {
+        speed = PlaybackControls.normalizeSpeed(value)
+        engine.setSpeed(if (boostActive) 2f else speed)
+        vm.updatePlayerSettings(context, vm.playerSettings.copy(playbackSpeed = speed))
+    }
+    val currentEngine by rememberUpdatedState(engine)
+    val spaceController = remember {
+        HoldToBoostController(playerScope, { currentEngine.isPlaying },
+            { if (currentEngine.isPlaying) currentEngine.pause() else currentEngine.play() },
+            { active -> boostActive = active; currentEngine.setSpeed(if (active) 2f else speed) })
+    }
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(owner, engine, currentEpisode.id, settingsOpen, episodePickerOpen, shortcutHelpOpen, locked) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
+                spaceController.up(cancelled = true)
+                boostActive = false
+                runCatching { currentEngine.setSpeed(speed) }
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer); spaceController.up(cancelled = true) }
+    }
+    fun handlePlaybackKey(event: android.view.KeyEvent): Boolean {
+        val code = event.keyCode
+        if (code == android.view.KeyEvent.KEYCODE_SPACE && event.action == android.view.KeyEvent.ACTION_UP) {
+            spaceController.up(cancelled = event.isCanceled)
+            return !settingsOpen && !episodePickerOpen && !shortcutHelpOpen
+        }
+        if (event.action != android.view.KeyEvent.ACTION_DOWN || settingsOpen || episodePickerOpen || shortcutHelpOpen || subtitleSelectionOpen || locked) return false
+        if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
+        if (code == android.view.KeyEvent.KEYCODE_SPACE) { spaceController.down(); return true }
+        // Let TV D-pad and focused controls retain their normal navigation/activation.
+        if (isTv && code in setOf(android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_DPAD_CENTER)) return false
+        if (code == android.view.KeyEvent.KEYCODE_ENTER && controlsVisible) return false
+        if (event.repeatCount > 0 && code !in setOf(android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_Z, android.view.KeyEvent.KEYCODE_X)) return true
+        when (code) {
+            android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (engine.isPlaying) engine.pause() else engine.play()
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> engine.play()
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> engine.pause()
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> engine.seekBy(-vm.playerSettings.seekButtonSeekSeconds.toDouble())
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> engine.seekBy(vm.playerSettings.seekButtonSeekSeconds.toDouble())
+            in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 -> PlaybackControls.percentPosition(engine.duration, code - android.view.KeyEvent.KEYCODE_0)?.let { engine.seekTo(it) }
+            android.view.KeyEvent.KEYCODE_LEFT_BRACKET -> applySpeed(PlaybackControls.stepSpeed(speed, -1))
+            android.view.KeyEvent.KEYCODE_RIGHT_BRACKET -> applySpeed(PlaybackControls.stepSpeed(speed, 1))
+            android.view.KeyEvent.KEYCODE_C -> { subtitleEnabled = !subtitleEnabled; setSubtitleVisibleForMode(subtitleEnabled) }
+            android.view.KeyEvent.KEYCODE_Z, android.view.KeyEvent.KEYCODE_X -> {
+                subtitleSyncMs = (subtitleSyncMs + if (code == android.view.KeyEvent.KEYCODE_Z) -500L else 500L).coerceIn(-600_000L, 600_000L)
+                engine.setSubtitleDelay(subtitleSyncMs)
+                vm.updatePlayerSettings(context, vm.playerSettings.copy(syncOffsetMs = subtitleSyncMs))
+                Toast.makeText(context, "자막 싱크 ${subtitleSyncMs / 1000.0}초", Toast.LENGTH_SHORT).show()
+            }
+            android.view.KeyEvent.KEYCODE_S -> skipCurrentChapter()
+            android.view.KeyEvent.KEYCODE_M -> { muted = !muted; engine.setMuted(muted) }
+            android.view.KeyEvent.KEYCODE_PAGE_UP, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> previousEpisode?.let(::switchEpisode)
+            android.view.KeyEvent.KEYCODE_PAGE_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> nextEpisode?.let(::switchEpisode)
+            android.view.KeyEvent.KEYCODE_P -> playerScope.launch {
+                val saved = savePlayerScreenshot(context, engine, anime.title, currentEpisode.title)
+                Toast.makeText(context, if (saved) "스크린샷을 저장했습니다" else "스크린샷 저장 실패", Toast.LENGTH_SHORT).show()
+            }
+            android.view.KeyEvent.KEYCODE_E -> { episodePickerOpen = true; controlsVisible = true }
+            else -> return false
+        }
+        return true
+    }
+
     val currentChapter = chapters.firstOrNull {
         val s = position / 1000.0
         s >= it.startTime && s < it.endTime
@@ -1812,6 +1897,7 @@ fun PlayerScreen(
             .focusRequester(tvRootRequester)
             .focusable(enabled = isTv && !controlsVisible && !settingsOpen)
             .onPreviewKeyEvent { event ->
+                if (handlePlaybackKey(event.nativeKeyEvent)) return@onPreviewKeyEvent true
                 if (!isTv || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 val center = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
                 if (event.key == Key.Back || event.key == Key.Escape) {
@@ -1837,6 +1923,8 @@ fun PlayerScreen(
                     // Focus belongs to the Compose player controls instead.
                     seekSeconds = vm.playerSettings.doubleTapSeekSeconds.coerceAtLeast(0L)
                     gesturesLocked = locked
+                    onPlaybackKeyEvent = ::handlePlaybackKey
+                    onBoostChanged = { active -> boostActive = active; engine.setSpeed(if (active) 2f else speed) }
                     onSingleTap = {
                         if (locked) showUnlockButton = true
                         else controlsVisible = !controlsVisible
@@ -1857,10 +1945,46 @@ fun PlayerScreen(
             },
             update = { view ->
                 view.gesturesLocked = locked
+                view.onPlaybackKeyEvent = ::handlePlaybackKey
+                view.onBoostChanged = { active -> boostActive = active; engine.setSpeed(if (active) 2f else speed) }
                 view.seekSeconds = vm.playerSettings.doubleTapSeekSeconds.coerceAtLeast(0L)
             }
         )
         }
+
+        if (boostActive && !MainActivity.isInPictureInPicture) {
+            Surface(Modifier.align(Alignment.TopCenter).padding(top = 24.dp), color = Color.Black.copy(.7f), shape = RoundedCornerShape(12.dp)) {
+                Text("▶▶ 2배속", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = Color.White)
+            }
+        }
+        if (controlsVisible && !locked && !settingsOpen && !MainActivity.isInPictureInPicture) {
+            Row(Modifier.align(Alignment.TopCenter).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Surface(onClick = { episodePickerOpen = true }, color = Color.Black.copy(.65f), shape = RoundedCornerShape(12.dp)) { Text("회차 목록 · E", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp) }
+                Surface(onClick = { shortcutHelpOpen = true }, color = Color.Black.copy(.65f), shape = RoundedCornerShape(12.dp)) { Text("조작 안내", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp) }
+            }
+        }
+        if (episodePickerOpen) {
+            var episodeSearch by remember { mutableStateOf("") }
+            val episodeListState = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = currentEpisodeIndex.coerceAtLeast(0))
+            AlertDialog(onDismissRequest = { episodePickerOpen = false }, title = { Text("회차 선택") }, text = {
+                Column(Modifier.heightIn(max = 360.dp)) {
+                    androidx.compose.material3.OutlinedTextField(value = episodeSearch, onValueChange = { episodeSearch = it }, singleLine = true, placeholder = { Text("회차 · 제목 검색") })
+                    val matching = CollectionQuery.episodes(orderedEpisodes, episodeSearch, false)
+                    LaunchedEffect(episodeSearch) { if (episodeSearch.isNotBlank()) episodeListState.scrollToItem(0) }
+                    LazyColumn(state = episodeListState) {
+                        items(matching, key = { it.id }) { target ->
+                            TextButton(enabled = playableEpisode(target) && !loading, onClick = { if (target.id == currentEpisode.id) episodePickerOpen = false else switchEpisode(target) }, modifier = Modifier.fillMaxWidth()) {
+                                val progress = vm.getProgress(anime.id, target.id, target.number)
+                                Text("${if (target.id == currentEpisode.id) "▶ " else ""}${target.displayNumber}화 · ${target.title}${if (progress != null && progress.progress >= .95f) " ✓" else ""}", maxLines = 2, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                }
+            }, confirmButton = { TextButton(onClick = { episodePickerOpen = false }) { Text("닫기") } })
+        }
+        if (shortcutHelpOpen) AlertDialog(onDismissRequest = { shortcutHelpOpen = false }, title = { Text("플레이어 조작") }, text = {
+            Text("영상 길게 누르기: 누르는 동안 2배속\n더블 탭: 좌/우 탐색\n\n외부 키보드\nSpace: 재생/정지 · 길게 눌러 2배속\n←/→: 탐색 · 0~9: 0~90% 이동\n[ / ]: 배속 · C: 자막 · Z/X: 싱크 ±0.5초\nS: OP/ED 스킵 · M: 음소거 · P: 스크린샷\nPageUp/Down: 이전/다음 화 · E: 회차 목록")
+        }, confirmButton = { TextButton(onClick = { shortcutHelpOpen = false }) { Text("확인") } })
 
         // Translated ASS events are rendered directly by libass in memory.
         // This view never becomes an mpv subtitle track and never causes
@@ -2041,10 +2165,10 @@ fun PlayerScreen(
                                     TvPlayerSettingSwitch("OP/ED 스킵 버튼", "감지된 구간에 건너뛰기 버튼 표시", showSkipButton, { showSkipButton = it; vm.updatePlayerSettings(context, vm.playerSettings.copy(showChapterSkipButton = it)) })
                                     Spacer(Modifier.height(18.dp))
                                     Text("재생 속도", color = Color.White.copy(.7f), fontSize = 14.sp)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 8.dp)) {
-                                        listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { rate ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState())) {
+                                        PlaybackControls.speeds.forEach { rate ->
                                             val selected = speed == rate
-                                            Surface(onClick = { speed = rate; engine.setSpeed(rate); vm.updatePlayerSettings(context, vm.playerSettings.copy(playbackSpeed = rate)) }, modifier = Modifier.focusable(), shape = RoundedCornerShape(12.dp), color = if (selected) Color(0xFF303A25) else Color.White.copy(.08f), border = BorderStroke(1.dp, if (selected) Color.White else Color.Transparent)) {
+                                            Surface(onClick = { applySpeed(rate) }, modifier = Modifier.focusable(), shape = RoundedCornerShape(12.dp), color = if (selected) Color(0xFF303A25) else Color.White.copy(.08f), border = BorderStroke(1.dp, if (selected) Color.White else Color.Transparent)) {
                                                 Text("${"%.2f".format(Locale.US, rate)}x", color = Color.White, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
                                             }
                                         }
@@ -2157,7 +2281,7 @@ fun PlayerScreen(
             // in the visual center, and a dedicated seek/action dock at bottom.
             val tvAccent = Color(0xFFB6F05A)
             val remaining = (duration - position).coerceAtLeast(0L)
-            val speedSteps = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+            val speedSteps = PlaybackControls.speeds
             val nextSpeed = speedSteps[(speedSteps.indexOfFirst { kotlin.math.abs(it - speed) < 0.01f }.coerceAtLeast(0) + 1) % speedSteps.size]
 
             Box(Modifier.fillMaxSize()) {
@@ -2236,9 +2360,7 @@ fun PlayerScreen(
                                 setSubtitleVisibleForMode(subtitleEnabled)
                             }
                             TvDockButton("재생 속도", "${String.format(Locale.US, "%.2f", speed)}×", Icons.Default.Speed, Modifier.weight(1f)) {
-                                speed = nextSpeed
-                                engine.setSpeed(nextSpeed)
-                                vm.updatePlayerSettings(context, vm.playerSettings.copy(playbackSpeed = nextSpeed))
+                                applySpeed(nextSpeed)
                             }
                             TvDockButton("OP / ED", if (showSkipButton) "스킵 버튼 켜짐" else "스킵 버튼 꺼짐", Icons.Default.Forward10, Modifier.weight(1.25f)) {
                                 if (currentChapter != null) skipCurrentChapter() else {
@@ -3141,13 +3263,11 @@ fun PlayerScreen(
                                 Text("재생 속도", color = Color.White, fontSize = 13.sp)
                                 Text("${"%.2f".format(Locale.US, speed)}x", color = Color.White.copy(.55f), fontSize = 11.sp)
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                listOf(0.75f, 1f, 1.25f, 1.5f, 2f).forEach { rate ->
+                            Row(Modifier.weight(1.8f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                PlaybackControls.speeds.forEach { rate ->
                                     Surface(
                                         onClick = {
-                                            speed = rate
-                                            engine.setSpeed(rate)
-                                            vm.updatePlayerSettings(context, vm.playerSettings.copy(playbackSpeed = rate))
+                                            applySpeed(rate)
                                         },
                                         modifier = Modifier.tvFocusable(),
                                         shape = RoundedCornerShape(9.dp),

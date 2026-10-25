@@ -409,20 +409,20 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onBackground
             )
             Slider(
-                value = listOf(0.1f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+                value = com.lilac.anime.core.playback.PlaybackControls.speeds
                     .indexOf(settings.playbackSpeed).coerceAtLeast(0).toFloat(),
                 onValueChange = { value ->
-                    val options = listOf(0.1f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+                    val options = com.lilac.anime.core.playback.PlaybackControls.speeds
                     vm.updatePlayerSettings(context, settings.copy(playbackSpeed = options[value.toInt().coerceIn(options.indices)]))
                 },
-                valueRange = 0f..8f,
-                steps = 7
+                valueRange = 0f..10f,
+                steps = 9
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                listOf(0.1f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f).forEach { speed ->
+                com.lilac.anime.core.playback.PlaybackControls.speeds.forEach { speed ->
                     Text(
                         "${speed}x",
                         fontSize = 9.sp,

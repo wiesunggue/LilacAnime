@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -26,10 +27,13 @@ fun DownloadManagerScreen(vm: AnimeViewModel, back: () -> Unit, navigate: (Strin
     val context = LocalContext.current
     val statuses by vm.downloadStatuses.collectAsState()
     var filter by remember { mutableStateOf("all") }
-    var deleting by remember { mutableStateOf<MpvOfflineStore.Status?>(null) }
+    var deleting by remember { mutableStateOf<List<MpvOfflineStore.Status>>(emptyList()) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var collapsed by remember { mutableStateOf<Set<String>>(emptySet()) }
     var message by remember { mutableStateOf<String?>(null) }
     fun perform(action: () -> Unit) { runCatching(action).onFailure { message = it.message ?: "요청을 처리하지 못했습니다." } }
-    val visible = statuses.filter { when (filter) {
+    val visible = statuses.filter { status ->
+        (query.isBlank() || status.title.contains(query.trim(), true) || status.episodeKey.contains(query.trim(), true)) && when (filter) {
         "active" -> it.state in setOf("queued", "downloading", "paused")
         "failed" -> it.state == "failed"
         "completed" -> it.state == "completed"
@@ -47,10 +51,24 @@ fun DownloadManagerScreen(vm: AnimeViewModel, back: () -> Unit, navigate: (Strin
                     FilterChip(selected = filter == key, onClick = { filter = key }, label = { Text(title) })
                 }
             }
+            OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true, placeholder = { Text("다운로드 제목 · 회차 검색") })
             message?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
             if (visible.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("표시할 다운로드가 없습니다.") }
             else LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(visible, key = { it.id }) { status ->
+                visible.groupBy { it.animeId }.forEach { (animeId, episodes) ->
+                    val allEpisodes = statuses.filter { it.animeId == animeId }
+                    val title = vm.getAnime(context, animeId)?.title ?: episodes.first().title.substringBeforeLast(" - ")
+                    item(key = "group:$animeId") {
+                        Column {
+                            TextButton(onClick = { collapsed = if (animeId in collapsed) collapsed - animeId else collapsed + animeId }) { Text("${if (animeId in collapsed) "▶" else "▼"} $title · ${episodes.size}회차") }
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(enabled = allEpisodes.any { DownloadQueuePolicy.canPause(it.state) }, onClick = { allEpisodes.filter { DownloadQueuePolicy.canPause(it.state) }.forEach { perform { OfflineDownloadManager.pause(context, it.animeId, it.episodeId) } } }) { Text("작품 전체 중지") }
+                                TextButton(enabled = allEpisodes.any { DownloadQueuePolicy.canResume(it.state, it.sourceUrl) }, onClick = { allEpisodes.filter { DownloadQueuePolicy.canResume(it.state, it.sourceUrl) }.forEach { perform { OfflineDownloadManager.resume(context, it.animeId, it.episodeId) } } }) { Text("작품 이어받기") }
+                                TextButton(onClick = { deleting = allEpisodes }) { Text("작품 전체 삭제", color = MaterialTheme.colorScheme.error) }
+                            }
+                        }
+                    }
+                    if (animeId !in collapsed) items(episodes, key = { it.id }) { status ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(status.title.ifBlank { "${status.animeId} · ${status.episodeKey}화" }, fontWeight = FontWeight.Bold)
@@ -61,18 +79,19 @@ fun DownloadManagerScreen(vm: AnimeViewModel, back: () -> Unit, navigate: (Strin
                                 if (DownloadQueuePolicy.canPause(status.state)) TextButton(onClick = { perform { OfflineDownloadManager.pause(context, status.animeId, status.episodeId) } }) { Text("일시정지") }
                                 if (DownloadQueuePolicy.canResume(status.state, status.sourceUrl)) TextButton(onClick = { perform { OfflineDownloadManager.resume(context, status.animeId, status.episodeId) } }) { Text(if (status.state == "failed") "재시도" else "이어받기") }
                                 if (status.state == "completed") TextButton(onClick = { navigate("player/${Uri.encode(status.animeId)}/${Uri.encode(status.episodeId)}") }) { Text("재생") }
-                                TextButton(onClick = { deleting = status }) { Text("삭제", color = MaterialTheme.colorScheme.error) }
+                                TextButton(onClick = { deleting = listOf(status) }) { Text("삭제", color = MaterialTheme.colorScheme.error) }
                             }
                         }
                     }
                 }
+                }
             }
         }
     }
-    deleting?.let { status ->
-        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("다운로드 삭제") },
-            text = { Text("${status.title}\n저장된 영상과 자막, 이어받기 파일을 삭제합니다.") },
-            confirmButton = { TextButton(onClick = { perform { OfflineDownloadManager.remove(context, status.animeId, status.episodeId) }; deleting = null }) { Text("삭제") } },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("취소") } })
+    if (deleting.isNotEmpty()) {
+        AlertDialog(onDismissRequest = { deleting = emptyList() }, title = { Text("다운로드 ${deleting.size}개 삭제") },
+            text = { Text("저장된 영상과 자막, 이어받기 파일을 삭제합니다.") },
+            confirmButton = { TextButton(onClick = { deleting.forEach { status -> perform { OfflineDownloadManager.remove(context, status.animeId, status.episodeId) } }; deleting = emptyList() }) { Text("삭제") } },
+            dismissButton = { TextButton(onClick = { deleting = emptyList() }) { Text("취소") } })
     }
 }

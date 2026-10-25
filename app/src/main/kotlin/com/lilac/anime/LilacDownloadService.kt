@@ -212,6 +212,17 @@ class LilacDownloadService : Service() {
 
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
+                DownloadRetryPolicy.run(onRetry = { attempt, wait ->
+                    synchronized(lock) {
+                        if (key !in pausedByUser && key !in cancelledForRemoval) {
+                            MpvOfflineStore.findStatus(applicationContext, key)?.let {
+                                MpvOfflineStore.saveStatus(applicationContext, it.copy(state = STATE_QUEUED,
+                                    error = "연결 오류 · ${wait / 1000}초 뒤 자동 재시도 ($attempt/2)"))
+                            }
+                        }
+                    }
+                    publishSummary()
+                }) {
                 slots.withPermit {
                     // Resolve optional metadata inside the registered job, so
                     // pause/restart can see and cancel it immediately.
@@ -235,14 +246,15 @@ class LilacDownloadService : Service() {
                         referer = referer ?: old?.referer,
                         episodeNumber = episodeNumber,
                         episodeKey = episodeKey,
-                        flixCloudPk = flixCloudPk,
-                        streamHeaders = streamHeaders,
+                        flixCloudPk = flixCloudPk ?: old?.flixCloudPk,
+                        streamHeaders = streamHeaders ?: old?.streamHeaders,
                         videoSource = videoSource,
                         anilistId = resolvedAnilistId,
                         malId = resolvedMalId,
                         subtitleUrl = requestedSubtitleUrl ?: old?.subtitleUrl,
                         subtitleReferer = requestedSubtitleReferer ?: old?.subtitleReferer
                     )
+                }
                 }
             } catch (cancel: CancellationException) {
                 val removed = synchronized(lock) { cancelledForRemoval.contains(key) }

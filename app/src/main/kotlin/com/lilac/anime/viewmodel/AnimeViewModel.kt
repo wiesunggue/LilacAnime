@@ -1182,6 +1182,22 @@ class AnimeViewModel : ViewModel() {
         }
     }
 
+    fun removeFromLibrary(context: Context, ids: Set<String>) {
+        if (ids.isEmpty()) return
+        library = library - ids
+        syncController.request()
+        val updated = library
+        viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveLibrary(context, updated) }
+    }
+
+    fun deleteEpisodeProgress(context: Context, animeId: String, episode: Episode) {
+        val previous = PlaybackHistory.find(watchHistory, animeId, episode.id, episode.number) ?: return
+        watchHistory = watchHistory.filterNot { it === previous }
+        syncController.request()
+        val updated = watchHistory
+        viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveWatchHistory(context, updated) }
+    }
+
     fun isInLibrary(animeId: String): Boolean {
         return animeId in library
     }

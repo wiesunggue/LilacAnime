@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +56,10 @@ fun WatchHistoryScreen(
     val context = LocalContext.current
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectionMode by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var source by rememberSaveable { mutableStateOf("all") }
+    var sort by rememberSaveable { mutableStateOf("recent") }
     var resolvedAnime by remember { mutableStateOf<Map<String, Anime>>(emptyMap()) }
 
     val historyAnimeIds = vm.watchHistory.map { it.animeId }.distinct()
@@ -67,9 +72,12 @@ fun WatchHistoryScreen(
         resolvedAnime = available
     }
 
-    val historyItems = vm.watchHistory
-        .distinctBy { it.animeId }
+    val allHistory = vm.watchHistory.sortedByDescending { it.updated }.distinctBy { it.animeId }
         .mapNotNull { progress -> (vm.getAnime(context, progress.animeId) ?: resolvedAnime[progress.animeId])?.let { it to progress } }
+    val byId = allHistory.associate { it.first.id to it.second }
+    val historyItems = CollectionQuery.apply(allHistory.map { it.first }, vm.watchHistory, query, source, "all", sort)
+        .map { it to byId.getValue(it.id) }
+    LaunchedEffect(historyAnimeIds) { selectedIds = selectedIds.intersect(historyAnimeIds.toSet()); if (selectedIds.isEmpty()) selectionMode = false }
 
     fun toggleSelection(id: String) {
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
@@ -82,12 +90,12 @@ fun WatchHistoryScreen(
                 SelectionToolbar(
                     selectedCount = selectedIds.size,
                     totalCount = historyItems.size,
-                    onSelectAll = { selectedIds = historyItems.map { it.first.id }.toSet() },
-                    onDelete = {
-                        vm.deleteWatchHistory(context, selectedIds)
-                        selectedIds = emptySet()
-                        selectionMode = false
+                    onSelectAll = {
+                        val ids = historyItems.map { it.first.id }.toSet()
+                        selectedIds = if (selectedIds.containsAll(ids)) selectedIds - ids else selectedIds + ids
+                        if (selectedIds.isEmpty()) selectionMode = false
                     },
+                    onDelete = { confirmingDelete = true },
                     onCancel = { selectedIds = emptySet(); selectionMode = false }
                 )
             } else {
@@ -101,6 +109,11 @@ fun WatchHistoryScreen(
                 }
             }
 
+            OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("시청 기록 검색") })
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                CollectionMenu(source, CollectionQuery.sources) { source = it }
+                CollectionMenu(sort, linkedMapOf("recent" to "최근 시청순", "title" to "제목순")) { sort = it }
+            }
             if (historyItems.isEmpty()) {
                 Column(
                     Modifier.fillMaxSize(),
@@ -167,7 +180,8 @@ fun WatchHistoryScreen(
                                 }
                                 Spacer(Modifier.height(6.dp))
                                 Text(anime.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
-                                Text("EP.${PlaybackHistory.episodeLabel(progress.episodeKey, progress.episodeNumber)}", color = Lilac, fontSize = 11.sp, maxLines = 1)
+                                Text("EP.${PlaybackHistory.episodeLabel(progress.episodeKey, progress.episodeNumber)} · ${(PlaybackHistory.fraction(progress.progress) * 100).toInt()}%", color = Lilac, fontSize = 11.sp, maxLines = 1)
+                                if (!selectionMode) TextButton(onClick = { onNavigate("resume/${android.net.Uri.encode(anime.id)}") }) { Text("이어보기") }
                             }
                         }
                     }
@@ -175,6 +189,10 @@ fun WatchHistoryScreen(
             }
         }
     }
+    if (confirmingDelete) AlertDialog(onDismissRequest = { confirmingDelete = false }, title = { Text("시청 기록 삭제") },
+        text = { Text("선택한 ${selectedIds.size}개 작품의 시청 기록을 삭제합니다. 연결된 기기에도 반영됩니다.") },
+        confirmButton = { TextButton(onClick = { vm.deleteWatchHistory(context, selectedIds); selectedIds = emptySet(); selectionMode = false; confirmingDelete = false }) { Text("삭제") } },
+        dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("취소") } })
 }
 
 @Composable

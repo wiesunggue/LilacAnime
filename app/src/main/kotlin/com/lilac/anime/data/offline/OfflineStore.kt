@@ -153,8 +153,7 @@ object OfflineStore {
                 if (saved != Long.MIN_VALUE) saved else 10L
             },
             playbackSpeed = prefs.getFloat("pref_playback_speed", 1.0f).let { saved ->
-                val options = floatArrayOf(0.1f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
-                options.minByOrNull { kotlin.math.abs(it - saved) } ?: 1.0f
+                com.lilac.anime.core.playback.PlaybackControls.normalizeSpeed(saved)
             },
             autoPlay = prefs.getBoolean("pref_auto_play", true),
             autoSkip = prefs.getBoolean("pref_auto_skip", true),

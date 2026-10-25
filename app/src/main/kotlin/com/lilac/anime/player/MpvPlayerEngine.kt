@@ -1282,6 +1282,8 @@ vec4 hook() {
         mpv.setPropertyDouble("speed", speed.toDouble())
     }
 
+    fun setMuted(muted: Boolean) { runCatching { mpv.setPropertyBoolean("mute", muted) } }
+
     fun getSpeed(): Float = (mpv.getPropertyDouble("speed") ?: 1.0).toFloat()
 
     /** Re-arm the shared libmpv instance when a new PlayerScreen is entered.
@@ -1548,6 +1550,8 @@ class MpvPlayerSurfaceView(
     var onUnlockTap: (() -> Unit)? = null
     var onDoubleTap: ((Int) -> Unit)? = null
     var onLongPress: (() -> Unit)? = null
+    var onPlaybackKeyEvent: ((KeyEvent) -> Boolean)? = null
+    var onBoostChanged: ((Boolean) -> Unit)? = null
 
     private var attached = false
     private var currentSurface: Surface? = null
@@ -1594,7 +1598,7 @@ class MpvPlayerSurfaceView(
 
                 longPressActive = true
                 speedBeforeLongPress = engine.getSpeed().coerceAtLeast(0.1f)
-                engine.setSpeed(2.0f)
+                onBoostChanged?.invoke(true) ?: engine.setSpeed(2.0f)
                 onLongPress?.invoke()
             }
         }
@@ -1607,6 +1611,7 @@ class MpvPlayerSurfaceView(
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        onPlaybackKeyEvent?.let { return it(event) || super.dispatchKeyEvent(event) }
         if (event.action == KeyEvent.ACTION_DOWN) {
             val delta = seekSeconds.coerceAtLeast(0L).toDouble()
             when (event.keyCode) {
@@ -1635,13 +1640,26 @@ class MpvPlayerSurfaceView(
         if (event.actionMasked == MotionEvent.ACTION_UP ||
             event.actionMasked == MotionEvent.ACTION_CANCEL
         ) {
-            if (longPressActive) {
-                longPressActive = false
-                engine.setSpeed(speedBeforeLongPress)
-            }
+            releaseBoost()
         }
 
         return handled || super.onTouchEvent(event)
+    }
+
+    private fun releaseBoost() {
+        if (!longPressActive) return
+        longPressActive = false
+        onBoostChanged?.invoke(false) ?: runCatching { engine.setSpeed(speedBeforeLongPress) }
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!hasWindowFocus) releaseBoost()
+    }
+
+    override fun onDetachedFromWindow() {
+        releaseBoost()
+        super.onDetachedFromWindow()
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
@@ -1671,6 +1689,7 @@ class MpvPlayerSurfaceView(
     }
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        releaseBoost()
         if (attached) engine.detachSurface()
         attached = false
         currentSurface?.release()

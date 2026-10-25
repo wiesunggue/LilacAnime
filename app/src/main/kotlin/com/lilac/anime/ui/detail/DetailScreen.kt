@@ -309,13 +309,16 @@ fun DetailScreen(
 
     val currentAnime = detailAnime
     val saved = vm.isInLibrary(currentAnime.id)
-    val isLinkkf = vm.playerSettings.videoSourcePreference == "linkkf"
-    val isReAnime = vm.playerSettings.videoSourcePreference == "reanime"
+    val detailSource = PlaybackHistory.sourceFor(currentAnime, vm.playerSettings.videoSourcePreference)
+    val isLinkkf = detailSource == "linkkf"
+    val isReAnime = detailSource == "reanime"
     val viewStats = vm.linkkfViewStats
     val relatedSeries = vm.linkkfRelatedSeries
     var detailTab by remember(currentAnime.id, isReAnime) { mutableIntStateOf(if (isReAnime) 3 else 0) }
     var episodeQuery by remember(currentAnime.id) { mutableStateOf("") }
     var showCover by remember(currentAnime.id) { mutableStateOf(false) }
+    var episodeAction by remember(currentAnime.id) { mutableStateOf<Episode?>(null) }
+    var confirmingEpisodeDelete by remember(currentAnime.id) { mutableStateOf<Episode?>(null) }
     val episodes = vm.episodes(currentAnime)
     val episodesLoading = vm.isEpisodesLoading(currentAnime)
 
@@ -358,29 +361,19 @@ fun DetailScreen(
         }
     }
 
-    // 재생 버튼은 최신 회차가 아니라 사용자가 이 작품에서 가장 최근에 재생한 회차를 사용한다.
-    // 시청 기록이 없으면 기존처럼 목록의 첫 회차(정렬 기준상 최신 회차)를 사용한다.
     val lastPlayedProgress = vm.getLatestProgress(currentAnime.id)
     val lastPlayedEpisode = remember(episodes, lastPlayedProgress) {
-        lastPlayedProgress?.let { progress ->
-            episodes.firstOrNull { it.displayNumber.equals(progress.episodeKey, ignoreCase = true) }
-                ?: episodes.firstOrNull { it.number == progress.episodeNumber }
-        } ?: sortedEpisodes.firstOrNull()
+        PlaybackHistory.selectEpisode(episodes, lastPlayedProgress, null)
+            ?: PlaybackHistory.orderedEpisodes(episodes, lastPlayedProgress?.episodeKey).firstOrNull { it.playable }
     }
-
-    val episodePageCount = remember(sortedEpisodes.size) {
-        ((sortedEpisodes.size + episodePageSize - 1) / episodePageSize).coerceAtLeast(1)
+    val filteredEpisodes = remember(episodes, episodeQuery, newestFirst) {
+        CollectionQuery.episodes(episodes, episodeQuery, newestFirst)
     }
-    LaunchedEffect(sortedEpisodes.size, newestFirst) {
-        episodePage = episodePage.coerceIn(0, (episodePageCount - 1).coerceAtLeast(0))
+    val episodePageCount = ((filteredEpisodes.size + episodePageSize - 1) / episodePageSize).coerceAtLeast(1)
+    LaunchedEffect(filteredEpisodes.size, newestFirst, episodeQuery) {
+        episodePage = episodePage.coerceIn(0, episodePageCount - 1)
     }
-    val visibleEpisodes = remember(sortedEpisodes, episodePage, episodeQuery) {
-        val from = (episodePage * episodePageSize).coerceAtMost(sortedEpisodes.size)
-        val to = (from + episodePageSize).coerceAtMost(sortedEpisodes.size)
-        sortedEpisodes.subList(from, to).filter { ep ->
-            episodeQuery.isBlank() || ep.displayNumber.contains(episodeQuery.trim(), ignoreCase = true) || ep.title.contains(episodeQuery.trim(), ignoreCase = true)
-        }
-    }
+    val visibleEpisodes = filteredEpisodes.drop(episodePage * episodePageSize).take(episodePageSize)
 
     val downloadProgressMap by vm.downloadProgressMap.collectAsState()
 
@@ -399,7 +392,7 @@ fun DetailScreen(
 
     // 비동기 URL 추출 함수
     suspend fun extractEpisodeInfo(ep: Episode): Pair<List<StreamQuality>, String?> {
-        val selectedSource = vm.playerSettings.videoSourcePreference
+        val selectedSource = detailSource
         if (selectedSource == "miruro" || selectedSource == "ohli24") {
             val resolved = withContext(Dispatchers.IO) {
                 if (selectedSource == "miruro") com.lilac.anime.data.MiruroClient().resolve(ep)
@@ -417,7 +410,7 @@ fun DetailScreen(
         // Current Linkkf (linkani.tv) exposes the actual HLS/VTT URLs in the
         // server-rendered watch page. Resolve that directly; do not mount the
         // generic WebView extractor for Linkkf.
-        if (vm.playerSettings.videoSourcePreference == "linkkf") {
+        if (detailSource == "linkkf") {
             val resolved = runCatching {
                 LinkkfPlayerResolver.resolve(context, ep)
             }.getOrNull()
@@ -437,7 +430,7 @@ fun DetailScreen(
         }
 
         // 이미 직접 재생 가능한 미디어 URL이면 WebView 추출을 거치지 않는다.
-        val direct = if (vm.playerSettings.videoSourcePreference == "linkkf") {
+        val direct = if (detailSource == "linkkf") {
             ep.videoUrl?.takeIf {
                 it.startsWith("http://", true) || it.startsWith("https://", true)
             }
@@ -453,7 +446,7 @@ fun DetailScreen(
             return Pair(listOf(mimeQuality), null)
         }
 
-        val targetUrl = if (vm.playerSettings.videoSourcePreference == "animenosub") {
+        val targetUrl = if (detailSource == "animenosub") {
             ep.videoUrl ?: withContext(Dispatchers.IO) {
                 animenosubClient.resolveEpisodeUrl(currentAnime.title, ep.displayNumber)
             }
@@ -476,7 +469,7 @@ fun DetailScreen(
         activeExtractTargetUrl = null
         currentExtractDeferred = null
         // Animenosub is a video source only. Keep Linkkf subtitle discovery independent.
-        return if (vm.playerSettings.videoSourcePreference == "animenosub") {
+        return if (detailSource == "animenosub") {
             result.first to null
         } else {
             result
@@ -490,7 +483,7 @@ fun DetailScreen(
      * subtitle Referer as one result.
      */
     suspend fun extractLinkkfDownloadInfo(ep: Episode): Pair<List<StreamQuality>, String?> {
-        val selectedSource = vm.playerSettings.videoSourcePreference
+        val selectedSource = detailSource
         if (selectedSource == "miruro" || selectedSource == "ohli24") {
             return try {
                 val resolved = withContext(Dispatchers.IO) {
@@ -819,7 +812,7 @@ fun DetailScreen(
                     subtitleReferer = LinkkfRequestContextStore.getSubtitle(context, currentAnime.id, ep.id)
                         ?: originalReferer,
                     streamHeaders = selectedQuality.headers,
-                    videoSource = vm.playerSettings.videoSourcePreference
+                    videoSource = detailSource
                 )
                 Toast.makeText(context, "${ep.displayNumber}화 (${selectedQuality.label}) 다운로드를 시작합니다.", Toast.LENGTH_SHORT).show()
 
@@ -995,7 +988,7 @@ fun DetailScreen(
                     subtitleReferer = LinkkfRequestContextStore.getSubtitle(context, currentAnime.id, ep.id)
                         ?: originalReferer,
                     streamHeaders = selectedQuality.headers,
-                    videoSource = vm.playerSettings.videoSourcePreference
+                    videoSource = detailSource
                 )
 
                         withContext(Dispatchers.IO) {
@@ -1137,7 +1130,7 @@ fun DetailScreen(
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
                             Spacer(Modifier.width(5.dp))
-                            Text("재생", color = Color.White)
+                            Text(if (lastPlayedProgress != null) "이어보기 · ${lastPlayedEpisode?.displayNumber}화" else "첫 화 재생", color = Color.White)
                         }
 
                         OutlinedButton(onClick = { vm.toggleLibrary(context, currentAnime.id) }) {
@@ -1395,7 +1388,7 @@ fun DetailScreen(
                 item {
                     OutlinedTextField(
                         value = episodeQuery,
-                        onValueChange = { episodeQuery = it },
+                        onValueChange = { episodeQuery = it; episodePage = 0 },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
                         singleLine = true,
                         placeholder = { Text("회차 검색") },
@@ -1533,10 +1526,17 @@ fun DetailScreen(
                             }
                         }
 
+                        Box {
+                            IconButton(onClick = { episodeAction = ep }) { Icon(Icons.Default.MoreVert, "회차 메뉴") }
+                            DropdownMenu(expanded = episodeAction?.id == ep.id, onDismissRequest = { episodeAction = null }) {
+                                DropdownMenuItem(text = { Text("시청 완료로 표시") }, onClick = { vm.updateProgress(context, currentAnime.id, ep.number, 1f, ep.id); episodeAction = null })
+                                if (epProgress != null) DropdownMenuItem(text = { Text("이 회차 시청 기록 삭제") }, onClick = { vm.deleteEpisodeProgress(context, currentAnime.id, ep); episodeAction = null })
+                            }
+                        }
                         when {
                             isDownloaded -> {
                                 IconButton(
-                                    onClick = { vm.deleteDownload(context, anime, ep) }
+                                    onClick = { confirmingEpisodeDelete = ep }
                                 ) {
                                     Icon(Icons.Default.Delete, contentDescription = "삭제", tint = MaterialTheme.colorScheme.error)
                                 }
@@ -1635,7 +1635,7 @@ fun DetailScreen(
                             }
                             currentExtractDeferred?.complete(Pair(enriched, extractedVtt))
                         },
-                        allowedHosts = when (vm.playerSettings.videoSourcePreference) {
+                        allowedHosts = when (detailSource) {
                             "animenosub" -> setOf("animenosub.to", "www.animenosub.to")
                             "reanime" -> setOf("reanime.to", "www.reanime.to", "flixcloud.cc", "www.flixcloud.cc")
                             else -> emptySet()
@@ -1680,6 +1680,13 @@ fun DetailScreen(
             )
         }
     }
+    confirmingEpisodeDelete?.let { target ->
+        AlertDialog(onDismissRequest = { confirmingEpisodeDelete = null }, title = { Text("${target.displayNumber}화 다운로드 삭제") },
+            text = { Text("저장된 영상과 자막을 삭제합니다.") },
+            confirmButton = { TextButton(onClick = { vm.deleteDownload(context, currentAnime, target); confirmingEpisodeDelete = null }) { Text("삭제") } },
+            dismissButton = { TextButton(onClick = { confirmingEpisodeDelete = null }) { Text("취소") } })
+    }
+
 }
 
 // ============================================================
