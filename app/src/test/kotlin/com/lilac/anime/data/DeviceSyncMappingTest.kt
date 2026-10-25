@@ -38,9 +38,11 @@ class DeviceSyncMappingTest {
         assertTrue(local.getJSONObject("library").has("miruro:123"))
         assertTrue(DeviceSyncMapping.library(local).isEmpty())
     }
-    @Test fun canonicalHashIsIndependentOfJsonOrderAndSyncTimestamps() {
+    @Test fun canonicalHashIsIndependentOfJsonOrderButTracksRealChangeTimes() {
         assertEquals(DeviceSyncMapping.hash(JSONObject("""{"title":"제목","updated":1,"anime":{"id":"1","title":"작품"}}""")),
-            DeviceSyncMapping.hash(JSONObject("""{"anime":{"title":"작품","id":"1"},"updated":9,"title":"제목"}""")))
+            DeviceSyncMapping.hash(JSONObject("""{"anime":{"title":"작품","id":"1"},"updated":1,"title":"제목"}""")))
+        assertNotEquals(DeviceSyncMapping.hash(JSONObject("""{"title":"제목","savedAt":1}""")),
+            DeviceSyncMapping.hash(JSONObject("""{"title":"제목","savedAt":2}""")))
     }
     @Test fun idsFitPcRulesIncludingPlusAndUtf8Fnv() {
         val encoded = "reanime:" + "%EA%B0%80".repeat(100)
@@ -56,6 +58,12 @@ class DeviceSyncMappingTest {
         assertEquals(200L, data.getLong("savedAt"))
         assertEquals("Title", data.getString("title_english"))
         assertEquals("poster", data.getJSONObject("images").getJSONObject("webp").getString("large_image_url"))
+    }
+    @Test fun unchangedListsHaveStableHashesAcrossSyncRuns() {
+        val w = WatchProgress("reanime:frieren", 1, 10f, "reanime:frieren:ep-1", 100L)
+        val first = DeviceSyncMapping.local(setOf(w.animeId), listOf(w), emptyMap(), JSONObject())
+        val second = DeviceSyncMapping.local(setOf(w.animeId), listOf(w), emptyMap(), first)
+        assertEquals(DeviceSyncMapping.hash(first), DeviceSyncMapping.hash(second))
     }
     @Test fun linkaniFallbackIncludesTheSourceVersionSegment() {
         assertEquals("linkani:https://linkani.tv/watch/123/a1/k4a/",

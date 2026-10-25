@@ -123,7 +123,7 @@ internal object DeviceSyncMapping {
     }
     fun library(local: JSONObject): Set<String> = local.optJSONObject("library")?.keys()?.asSequence()?.mapNotNull(::androidAnimeId)?.toSet() ?: emptySet()
     private fun stable(value: Any?): String = when (value) {
-        is JSONObject -> value.keys().asSequence().filter { it !in setOf("updated", "savedAt") }.sorted()
+        is JSONObject -> value.keys().asSequence().sorted()
             .joinToString(",", "{", "}") { JSONObject.quote(it) + ":" + stable(value.opt(it)) }
         is JSONArray -> (0 until value.length()).joinToString(",", "[", "]") { stable(value.opt(it)) }
         is String -> JSONObject.quote(value)
