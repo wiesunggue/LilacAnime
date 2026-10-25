@@ -34,12 +34,20 @@ object DeviceSyncClient {
     private const val MAX_BATCH = 500
     private const val KEY_DATA = "wire_data_v2"
     private const val KEY_SCHEMA = "wire_schema"
+    private const val KEY_ADDED = "library_added_at"
     private val syncMutex = Mutex()
 
     data class SyncResult(val library: Set<String>, val history: List<WatchProgress>, val sent: Int, val received: Int, val revision: Long)
 
     fun savedServer(context: Context): String = prefs(context).getString(KEY_URL, "") ?: ""
     fun isConnected(context: Context): Boolean = decryptToken(context).isNotBlank()
+
+    fun libraryAdded(context: Context, id: String) {
+        val p = prefs(context)
+        val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
+        added.put(id, System.currentTimeMillis())
+        p.edit().putString(KEY_ADDED, added.toString()).apply()
+    }
 
     fun disconnect(context: Context) {
         prefs(context).edit().remove(KEY_TOKEN).remove(KEY_REV).remove(KEY_SNAPSHOT).remove(KEY_DATA).remove(KEY_SCHEMA).apply()
@@ -75,7 +83,9 @@ object DeviceSyncClient {
         val migrated = p.getInt(KEY_SCHEMA, 0) == 2
         val previous = runCatching { JSONObject(p.getString(KEY_DATA, "{}") ?: "{}") }.getOrElse { JSONObject() }
         val before = if (migrated) runCatching { JSONObject(p.getString(KEY_SNAPSHOT, "{}") ?: "{}") }.getOrElse { JSONObject() } else JSONObject()
-        val local = DeviceSyncMapping.local(library, history, metadata, previous)
+        val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
+        val addedAt = added.keys().asSequence().associateWith { added.optLong(it, 1L) }
+        val local = DeviceSyncMapping.local(library, history, metadata, previous, addedAt)
         val outgoing = mutableListOf<JSONObject>()
         val now = System.currentTimeMillis()
         for (c in DeviceSyncMapping.collections) {
@@ -131,7 +141,7 @@ object DeviceSyncClient {
         val remoteHistory = DeviceSyncMapping.history(remote)
         // The snapshot describes the acknowledged state, not edits made during
         // the network request. Those edits stay pending for the next sync.
-        val acknowledged = DeviceSyncMapping.local(remoteLibrary, remoteHistory, metadata, remote)
+        val acknowledged = DeviceSyncMapping.local(remoteLibrary, remoteHistory, metadata, remote, addedAt)
         val finalState = withContext(Dispatchers.Main) {
             val (freshLibrary, freshHistory) = readFresh()
             val finalLibrary = (remoteLibrary + (freshLibrary - library)) - (library - freshLibrary)

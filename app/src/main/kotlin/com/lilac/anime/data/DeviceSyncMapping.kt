@@ -46,18 +46,26 @@ internal object DeviceSyncMapping {
         val provider = wireId.substringBefore(':')
         out.put("provider", provider).put("id", wireId.substringAfter(':')).put("mal_id", wireId)
         if (anime != null && anime.title.isNotBlank()) {
-            out.put("title", anime.title).put("title_english", anime.english).put("title_japanese", anime.native)
-            out.put("images", JSONObject().put("webp", JSONObject().put("large_image_url", anime.poster)))
-            out.put("synopsis", anime.description).put("year", anime.year).put("type", anime.format)
+            out.put("title", anime.title)
+            for ((key, value) in mapOf("title_english" to anime.english, "title_japanese" to anime.native,
+                "synopsis" to anime.description, "year" to anime.year, "type" to anime.format)) {
+                if (value.isNotBlank()) out.put(key, value)
+            }
+            if (anime.poster.isNotBlank()) {
+                val images = out.optJSONObject("images") ?: JSONObject()
+                val webp = images.optJSONObject("webp") ?: JSONObject()
+                webp.put("large_image_url", anime.poster); images.put("webp", webp); out.put("images", images)
+            }
         } else if (out.optString("title").isBlank()) out.put("title", id)
         if (!out.has("url")) out.put("url", if (provider == "reanime") "https://reanime.to/anime/${wireId.substringAfter(':')}" else "https://linkani.tv/ani/$id/")
         return out
     }
-    fun local(library: Set<String>, history: List<WatchProgress>, metadata: Map<String, Anime>, previous: JSONObject): JSONObject {
+    fun local(library: Set<String>, history: List<WatchProgress>, metadata: Map<String, Anime>, previous: JSONObject, addedAt: Map<String, Long> = emptyMap()): JSONObject {
         val lib = JSONObject(); val hist = JSONObject()
         library.forEach { id ->
             val wire = wireAnimeId(id)
             val data = animeData(id, metadata[id], previous.optJSONObject("library")?.optJSONObject(wire))
+            if (addedAt.containsKey(id)) data.put("savedAt", addedAt.getValue(id))
             if (!data.has("savedAt")) data.put("savedAt", 1L) // Legacy favorites must not resurrect a newer deletion.
             lib.put(wire, data)
         }

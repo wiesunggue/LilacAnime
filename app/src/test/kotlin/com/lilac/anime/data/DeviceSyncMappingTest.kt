@@ -49,6 +49,14 @@ class DeviceSyncMappingTest {
         assertEquals("x:(a)!'*", DeviceSyncMapping.fitId("x:%28a%29%21%27%2A"))
         assertTrue(DeviceSyncMapping.fitId("x:" + "a".repeat(600)).startsWith("x:#"))
     }
+    @Test fun readdingAFavoriteHasItsRealChangeTimeAndSparseMetadataKeepsPcFields() {
+        val old = JSONObject("""{"library":{"linkani:12":{"mal_id":"linkani:12","title":"제목","title_english":"Title","images":{"webp":{"large_image_url":"poster"}},"savedAt":10}},"history":{}}""")
+        val result = DeviceSyncMapping.local(setOf("12"), emptyList(), mapOf("12" to Anime(id="12", title="제목")), old, mapOf("12" to 200L))
+        val data = result.getJSONObject("library").getJSONObject("linkani:12")
+        assertEquals(200L, data.getLong("savedAt"))
+        assertEquals("Title", data.getString("title_english"))
+        assertEquals("poster", data.getJSONObject("images").getJSONObject("webp").getString("large_image_url"))
+    }
     @Test fun tombstonesRemoveTheExactWireKey() {
         val local = DeviceSyncMapping.local(setOf("123"), emptyList(), emptyMap(), JSONObject())
         val result = DeviceSyncMapping.merge(local, listOf(JSONObject("""{"collection":"library","id":"linkani:123","updated":200,"deleted":true}""")))

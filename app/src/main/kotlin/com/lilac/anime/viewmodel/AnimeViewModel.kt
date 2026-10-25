@@ -1081,6 +1081,7 @@ class AnimeViewModel : ViewModel() {
     }
 
     fun toggleLibrary(context: Context, animeId: String) {
+        if (animeId !in library) DeviceSyncClient.libraryAdded(context, animeId)
         library = if (animeId in library) library - animeId else library + animeId
         val updated = library
         viewModelScope.launch(Dispatchers.IO) {
