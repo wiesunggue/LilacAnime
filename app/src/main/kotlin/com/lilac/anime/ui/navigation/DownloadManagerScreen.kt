@@ -34,9 +34,9 @@ fun DownloadManagerScreen(vm: AnimeViewModel, back: () -> Unit, navigate: (Strin
     fun perform(action: () -> Unit) { runCatching(action).onFailure { message = it.message ?: "요청을 처리하지 못했습니다." } }
     val visible = statuses.filter { status ->
         (query.isBlank() || status.title.contains(query.trim(), true) || status.episodeKey.contains(query.trim(), true)) && when (filter) {
-        "active" -> it.state in setOf("queued", "downloading", "paused")
-        "failed" -> it.state == "failed"
-        "completed" -> it.state == "completed"
+        "active" -> status.state in setOf("queued", "downloading", "paused")
+        "failed" -> status.state == "failed"
+        "completed" -> status.state == "completed"
         else -> true
     } }.sortedWith(compareBy<MpvOfflineStore.Status> { it.animeId }.thenBy { it.episodeNumber }.thenBy { it.episodeKey })
     Scaffold(topBar = { TopAppBar(title = { Text("다운로드 관리") }, navigationIcon = { IconButton(onClick = back) { Icon(Icons.Default.ArrowBack, "뒤로") } }) }) { padding ->

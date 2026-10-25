@@ -14,6 +14,13 @@ class PlaybackControlsTest {
         assertEquals(4f, PlaybackControls.stepSpeed(4f, 1), 0f)
         assertEquals(3f, PlaybackControls.stepSpeed(2f, 1), 0f)
     }
+    @Test fun streamFailureInTheMiddleMustNotMarkEpisodeCompleted() {
+        assertFalse(PlaybackControls.completedPosition(50_000L, 100_000L))
+        assertFalse(PlaybackControls.completedPosition(0L, 0L))
+        assertFalse(PlaybackControls.completedPosition(0L, 1_000L))
+        assertTrue(PlaybackControls.completedPosition(99_000L, 100_000L))
+        assertTrue(PlaybackControls.completedPosition(1_000L, 1_000L))
+    }
     @Test fun percentSeekingRejectsUnknownDuration() {
         assertNull(PlaybackControls.percentPosition(0L, 2))
         assertNull(PlaybackControls.percentPosition(2000L, 10))

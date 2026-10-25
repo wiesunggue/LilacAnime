@@ -10,6 +10,7 @@ internal object PlaybackControls {
     val speeds = listOf(.1f, .25f, .5f, .75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f, 4f)
     fun normalizeSpeed(value: Float): Float = if (!value.isFinite()) 1f else speeds.minBy { kotlin.math.abs(it - value) }
     fun stepSpeed(value: Float, direction: Int): Float = speeds[(speeds.indexOf(normalizeSpeed(value)) + direction).coerceIn(speeds.indices)]
+    fun completedPosition(position: Long, duration: Long): Boolean = duration > 0L && position >= (duration - 2_000L).coerceAtLeast(duration / 2)
     fun percentPosition(duration: Long, digit: Int): Long? =
         if (duration <= 0L || digit !in 0..9) null else (duration * (digit / 10.0)).toLong()
 }

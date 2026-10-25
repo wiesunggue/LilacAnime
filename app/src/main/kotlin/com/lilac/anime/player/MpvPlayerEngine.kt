@@ -1552,6 +1552,7 @@ class MpvPlayerSurfaceView(
     var onLongPress: (() -> Unit)? = null
     var onPlaybackKeyEvent: ((KeyEvent) -> Boolean)? = null
     var onBoostChanged: ((Boolean) -> Unit)? = null
+    var onPlaybackFocusLost: (() -> Unit)? = null
 
     private var attached = false
     private var currentSurface: Surface? = null
@@ -1654,11 +1655,12 @@ class MpvPlayerSurfaceView(
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus) releaseBoost()
+        if (!hasWindowFocus) { releaseBoost(); onPlaybackFocusLost?.invoke() }
     }
 
     override fun onDetachedFromWindow() {
         releaseBoost()
+        onPlaybackFocusLost?.invoke()
         super.onDetachedFromWindow()
     }
 

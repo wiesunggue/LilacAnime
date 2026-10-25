@@ -1791,7 +1791,7 @@ fun PlayerScreen(
                 val stillCurrent = engine === observedEngine && currentEpisode.id == observedEpisodeId
                 val hasLoadedMedia = observedEngine.loadedLoadGeneration > 0L
                 Log.i("MpvEpisode", "EOF_EVENT episode=${currentEpisode.displayNumber} observed=$observedEpisodeId stillCurrent=$stillCurrent loaded=$hasLoadedMedia autoPlay=${vm.playerSettings.autoPlay} next=${nextEpisode?.displayNumber}")
-                if (stillCurrent && hasLoadedMedia) {
+                if (stillCurrent && hasLoadedMedia && PlaybackControls.completedPosition(observedEngine.currentPosition, observedEngine.duration)) {
                     vm.updateProgress(context, anime.id, currentEpisode.number, 1f, currentEpisode.id)
                     if (vm.playerSettings.autoPlay && nextEpisode != null) {
                         switchEpisode(nextEpisode)
@@ -1830,7 +1830,7 @@ fun PlayerScreen(
             { if (currentEngine.isPlaying) currentEngine.pause() else currentEngine.play() },
             { active -> boostActive = active; currentEngine.setSpeed(if (active) 2f else speed) })
     }
-    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val owner = context as? androidx.lifecycle.LifecycleOwner
     DisposableEffect(owner, engine, currentEpisode.id, settingsOpen, episodePickerOpen, shortcutHelpOpen, locked) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
@@ -1839,8 +1839,8 @@ fun PlayerScreen(
                 runCatching { currentEngine.setSpeed(speed) }
             }
         }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer); spaceController.up(cancelled = true) }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer); spaceController.up(cancelled = true) }
     }
     fun handlePlaybackKey(event: android.view.KeyEvent): Boolean {
         val code = event.keyCode
@@ -1854,6 +1854,17 @@ fun PlayerScreen(
         // Let TV D-pad and focused controls retain their normal navigation/activation.
         if (isTv && code in setOf(android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_DPAD_CENTER)) return false
         if (code == android.view.KeyEvent.KEYCODE_ENTER && controlsVisible) return false
+        val recognized = code in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 || code in setOf(
+            android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_MEDIA_REWIND,
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+            android.view.KeyEvent.KEYCODE_LEFT_BRACKET, android.view.KeyEvent.KEYCODE_RIGHT_BRACKET,
+            android.view.KeyEvent.KEYCODE_C, android.view.KeyEvent.KEYCODE_Z, android.view.KeyEvent.KEYCODE_X,
+            android.view.KeyEvent.KEYCODE_S, android.view.KeyEvent.KEYCODE_M, android.view.KeyEvent.KEYCODE_P,
+            android.view.KeyEvent.KEYCODE_PAGE_UP, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            android.view.KeyEvent.KEYCODE_PAGE_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_NEXT, android.view.KeyEvent.KEYCODE_E)
+        if (!recognized) return false
         if (event.repeatCount > 0 && code !in setOf(android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_Z, android.view.KeyEvent.KEYCODE_X)) return true
         when (code) {
             android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (engine.isPlaying) engine.pause() else engine.play()
@@ -1924,6 +1935,7 @@ fun PlayerScreen(
                     seekSeconds = vm.playerSettings.doubleTapSeekSeconds.coerceAtLeast(0L)
                     gesturesLocked = locked
                     onPlaybackKeyEvent = ::handlePlaybackKey
+                    onPlaybackFocusLost = { spaceController.up(cancelled = true) }
                     onBoostChanged = { active -> boostActive = active; engine.setSpeed(if (active) 2f else speed) }
                     onSingleTap = {
                         if (locked) showUnlockButton = true
@@ -1946,45 +1958,23 @@ fun PlayerScreen(
             update = { view ->
                 view.gesturesLocked = locked
                 view.onPlaybackKeyEvent = ::handlePlaybackKey
+                view.onPlaybackFocusLost = { spaceController.up(cancelled = true) }
                 view.onBoostChanged = { active -> boostActive = active; engine.setSpeed(if (active) 2f else speed) }
                 view.seekSeconds = vm.playerSettings.doubleTapSeekSeconds.coerceAtLeast(0L)
             }
         )
         }
 
-        if (boostActive && !MainActivity.isInPictureInPicture) {
-            Surface(Modifier.align(Alignment.TopCenter).padding(top = 24.dp), color = Color.Black.copy(.7f), shape = RoundedCornerShape(12.dp)) {
-                Text("▶▶ 2배속", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = Color.White)
-            }
-        }
-        if (controlsVisible && !locked && !settingsOpen && !MainActivity.isInPictureInPicture) {
-            Row(Modifier.align(Alignment.TopCenter).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Surface(onClick = { episodePickerOpen = true }, color = Color.Black.copy(.65f), shape = RoundedCornerShape(12.dp)) { Text("회차 목록 · E", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp) }
-                Surface(onClick = { shortcutHelpOpen = true }, color = Color.Black.copy(.65f), shape = RoundedCornerShape(12.dp)) { Text("조작 안내", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp) }
-            }
-        }
-        if (episodePickerOpen) {
-            var episodeSearch by remember { mutableStateOf("") }
-            val episodeListState = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = currentEpisodeIndex.coerceAtLeast(0))
-            AlertDialog(onDismissRequest = { episodePickerOpen = false }, title = { Text("회차 선택") }, text = {
-                Column(Modifier.heightIn(max = 360.dp)) {
-                    androidx.compose.material3.OutlinedTextField(value = episodeSearch, onValueChange = { episodeSearch = it }, singleLine = true, placeholder = { Text("회차 · 제목 검색") })
-                    val matching = CollectionQuery.episodes(orderedEpisodes, episodeSearch, false)
-                    LaunchedEffect(episodeSearch) { if (episodeSearch.isNotBlank()) episodeListState.scrollToItem(0) }
-                    LazyColumn(state = episodeListState) {
-                        items(matching, key = { it.id }) { target ->
-                            TextButton(enabled = playableEpisode(target) && !loading, onClick = { if (target.id == currentEpisode.id) episodePickerOpen = false else switchEpisode(target) }, modifier = Modifier.fillMaxWidth()) {
-                                val progress = vm.getProgress(anime.id, target.id, target.number)
-                                Text("${if (target.id == currentEpisode.id) "▶ " else ""}${target.displayNumber}화 · ${target.title}${if (progress != null && progress.progress >= .95f) " ✓" else ""}", maxLines = 2, modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    }
-                }
-            }, confirmButton = { TextButton(onClick = { episodePickerOpen = false }) { Text("닫기") } })
-        }
-        if (shortcutHelpOpen) AlertDialog(onDismissRequest = { shortcutHelpOpen = false }, title = { Text("플레이어 조작") }, text = {
-            Text("영상 길게 누르기: 누르는 동안 2배속\n더블 탭: 좌/우 탐색\n\n외부 키보드\nSpace: 재생/정지 · 길게 눌러 2배속\n←/→: 탐색 · 0~9: 0~90% 이동\n[ / ]: 배속 · C: 자막 · Z/X: 싱크 ±0.5초\nS: OP/ED 스킵 · M: 음소거 · P: 스크린샷\nPageUp/Down: 이전/다음 화 · E: 회차 목록")
-        }, confirmButton = { TextButton(onClick = { shortcutHelpOpen = false }) { Text("확인") } })
+        PlayerConvenienceOverlay(
+            vm = vm, anime = anime, currentEpisode = currentEpisode,
+            orderedEpisodes = orderedEpisodes, currentEpisodeIndex = currentEpisodeIndex,
+            boosted = boostActive && !MainActivity.isInPictureInPicture,
+            visible = controlsVisible && !locked && !settingsOpen && !MainActivity.isInPictureInPicture,
+            pickerOpen = episodePickerOpen, helpOpen = shortcutHelpOpen, loading = loading,
+            playable = ::playableEpisode, select = ::switchEpisode,
+            openPicker = { episodePickerOpen = true }, closePicker = { episodePickerOpen = false },
+            openHelp = { shortcutHelpOpen = true }, closeHelp = { shortcutHelpOpen = false }
+        )
 
         // Translated ASS events are rendered directly by libass in memory.
         // This view never becomes an mpv subtitle track and never causes
