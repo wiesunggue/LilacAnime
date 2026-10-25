@@ -1965,17 +1965,6 @@ fun PlayerScreen(
         )
         }
 
-        PlayerConvenienceOverlay(
-            vm = vm, anime = anime, currentEpisode = currentEpisode,
-            orderedEpisodes = orderedEpisodes, currentEpisodeIndex = currentEpisodeIndex,
-            boosted = boostActive && !MainActivity.isInPictureInPicture,
-            visible = controlsVisible && !locked && !settingsOpen && !MainActivity.isInPictureInPicture,
-            pickerOpen = episodePickerOpen, helpOpen = shortcutHelpOpen, loading = loading,
-            playable = ::playableEpisode, select = ::switchEpisode,
-            openPicker = { episodePickerOpen = true }, closePicker = { episodePickerOpen = false },
-            openHelp = { shortcutHelpOpen = true }, closeHelp = { shortcutHelpOpen = false }
-        )
-
         // Translated ASS events are rendered directly by libass in memory.
         // This view never becomes an mpv subtitle track and never causes
         // sub-add/sub-remove/sub-reload during translation.
@@ -3469,6 +3458,18 @@ fun PlayerScreen(
                 }
             }
         }
+        PlayerConvenienceOverlay(
+            vm = vm, anime = anime, currentEpisode = currentEpisode,
+            orderedEpisodes = orderedEpisodes, currentEpisodeIndex = currentEpisodeIndex,
+            menuTopPadding = if (isTv) 130.dp else 76.dp,
+            boosted = boostActive && !MainActivity.isInPictureInPicture,
+            visible = controlsVisible && !locked && !settingsOpen && !MainActivity.isInPictureInPicture,
+            pickerOpen = episodePickerOpen, helpOpen = shortcutHelpOpen, loading = loading,
+            playable = ::playableEpisode, select = ::switchEpisode,
+            openPicker = { episodePickerOpen = true }, closePicker = { episodePickerOpen = false },
+            openHelp = { shortcutHelpOpen = true }, closeHelp = { shortcutHelpOpen = false }
+        )
+
     }
 
     if (subtitleSelectionOpen) {

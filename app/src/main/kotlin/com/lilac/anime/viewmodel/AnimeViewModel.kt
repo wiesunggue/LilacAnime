@@ -511,6 +511,7 @@ class AnimeViewModel : ViewModel() {
             val lib = OfflineStore.getLibrary(context)
             val history = OfflineStore.getWatchHistory(context)
             val syncedAnime = DeviceSyncClient.cachedAnime(context)
+            val storedCollectionAnime = (lib + history.map { it.animeId }).mapNotNull { OfflineStore.getAnime(context, it) }
             val settings = OfflineStore.getPlayerSettings(context)
             val source = settings.videoSourcePreference
             // Home is intentionally NEVER served from the catalog cache.
@@ -519,6 +520,7 @@ class AnimeViewModel : ViewModel() {
                 library = lib
                 watchHistory = history
                 watchHistoryLoaded = true
+                storedCollectionAnime.forEach { animeCache.putIfAbsent(it.id, it) }
                 syncedAnime.forEach { (id, anime) -> animeCache.putIfAbsent(id, anime) }
                 syncController.refresh()
                 playerSettings = settings
@@ -730,7 +732,7 @@ class AnimeViewModel : ViewModel() {
     }
 
     fun loadLinkkfEpisodeServers(anime: Anime, force: Boolean = false) {
-        if (playerSettings.videoSourcePreference != "linkkf") return
+        if (PlaybackHistory.sourceFor(anime, playerSettings.videoSourcePreference) != "linkkf") return
         if (!force && linkkfDetailAnimeId == anime.id && linkkfEpisodeServers.isNotEmpty()) return
         viewModelScope.launch {
             try {
@@ -761,7 +763,7 @@ class AnimeViewModel : ViewModel() {
         if (linkkfDetailAnimeId == animeId) linkkfEpisodeServers else emptyList()
 
     fun loadLinkkfDetailExtras(anime: Anime, force: Boolean = false) {
-        if (playerSettings.videoSourcePreference != "linkkf") return
+        if (PlaybackHistory.sourceFor(anime, playerSettings.videoSourcePreference) != "linkkf") return
         if (!force && linkkfDetailAnimeId == anime.id) return
         linkkfDetailExtrasJob?.cancel()
         linkkfDetailExtrasLoading = true

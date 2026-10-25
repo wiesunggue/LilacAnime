@@ -23,6 +23,7 @@ internal fun BoxScope.PlayerConvenienceOverlay(
     currentEpisode: Episode,
     orderedEpisodes: List<Episode>,
     currentEpisodeIndex: Int,
+    menuTopPadding: androidx.compose.ui.unit.Dp,
     boosted: Boolean,
     visible: Boolean,
     pickerOpen: Boolean,
@@ -41,7 +42,7 @@ internal fun BoxScope.PlayerConvenienceOverlay(
             }
         }
         if (visible) {
-            Row(Modifier.align(Alignment.TopCenter).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.align(Alignment.TopCenter).padding(top = menuTopPadding), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Surface(onClick = { openPicker() }, color = Color.Black.copy(.65f), shape = RoundedCornerShape(12.dp)) { Text("회차 목록 · E", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp) }
                 Surface(onClick = { openHelp() }, color = Color.Black.copy(.65f), shape = RoundedCornerShape(12.dp)) { Text("조작 안내", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color.White, fontSize = 12.sp) }
             }
