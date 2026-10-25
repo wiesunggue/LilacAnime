@@ -115,6 +115,18 @@ class DeviceSyncMappingTest {
         assertTrue(restored.first.isEmpty())
         assertEquals(local, restored.second.single())
     }
+    @Test fun upgradeDoesNotDeleteOlderHiddenHistoryBeyondTheUiLimit() {
+        val hashes = JSONObject()
+        repeat(600) { hashes.put("miruro:episode-$it", "hash-$it") }
+        hashes.put("linkani:deleted-locally", "keep-deletion-detection")
+        val before = JSONObject().put("history", hashes).put("library", JSONObject().put("ohli24:x", "old").put("linkani:12", "kept"))
+        val migrated = DeviceSyncMapping.upgradeSnapshot(before)
+        assertEquals(1, migrated.getJSONObject("history").length())
+        assertTrue(migrated.getJSONObject("history").has("linkani:deleted-locally"))
+        assertTrue(migrated.getJSONObject("library").has("linkani:12"))
+        assertFalse(migrated.getJSONObject("library").has("ohli24:x"))
+        assertEquals(601, hashes.length())
+    }
     @Test fun tombstonesRemoveTheExactWireKey() {
         val local = DeviceSyncMapping.local(setOf("123"), emptyList(), emptyMap(), JSONObject())
         val result = DeviceSyncMapping.merge(local, listOf(JSONObject("""{"collection":"library","id":"linkani:123","updated":200,"deleted":true}""")))

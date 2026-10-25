@@ -90,7 +90,11 @@ object DeviceSyncClient {
         val storedSchema = p.getInt(KEY_SCHEMA, 0)
         val migrated = storedSchema in 2..3
         val previous = runCatching { JSONObject(p.getString(KEY_DATA, "{}") ?: "{}") }.getOrElse { JSONObject() }
-        val before = if (migrated) runCatching { JSONObject(p.getString(KEY_SNAPSHOT, "{}") ?: "{}") }.getOrElse { JSONObject() } else JSONObject()
+        val rawSnapshot = if (migrated) runCatching { JSONObject(p.getString(KEY_SNAPSHOT, "{}") ?: "{}") }.getOrElse { JSONObject() } else JSONObject()
+        // Prune only newly supported providers' old hashes. Cached history can
+        // exceed the 300-entry UI limit; those older records must not turn into
+        // tombstones just because the new UI cannot display every server row.
+        val before = if (storedSchema == 2) DeviceSyncMapping.upgradeSnapshot(rawSnapshot) else rawSnapshot
         val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
         val addedAt = added.keys().asSequence().associateWith { added.optLong(it, 1L) }
         val seeded = if (storedSchema == 2) DeviceSyncMapping.upgradeCollections(library, history, previous) else library to history

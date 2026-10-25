@@ -149,6 +149,15 @@ internal object DeviceSyncMapping {
     /** Older builds kept these providers only in the wire cache. Seed them
      * before planning deletions when upgrading, or an empty old UI would erase
      * the PC's favorites/history on the first automatic sync. */
+    fun upgradeSnapshot(snapshot: JSONObject): JSONObject {
+        val upgraded = JSONObject(snapshot.toString())
+        for (collection in collections) {
+            val hashes = upgraded.optJSONObject(collection) ?: continue
+            val restored = hashes.keys().asSequence().filter { it.substringBefore(':') in setOf("miruro", "animenosub", "ohli24") }.toList()
+            restored.forEach(hashes::remove)
+        }
+        return upgraded
+    }
     fun upgradeCollections(localLibrary: Set<String>, localHistory: List<WatchProgress>, previous: JSONObject): Pair<Set<String>, List<WatchProgress>> {
         val newlySupported = setOf("miruro", "animenosub", "ohli24")
         val restoredLibrary = library(previous).filter { it.substringBefore(':') in newlySupported }
