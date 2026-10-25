@@ -146,6 +146,17 @@ internal object DeviceSyncMapping {
         return obj.keys().asSequence().mapNotNull { id -> historyEntry(id, obj.optJSONObject(id) ?: JSONObject()) }
             .sortedByDescending { it.updated }.distinctBy { "${it.animeId}|${it.episodeKey}" }.take(300).toList()
     }
+    /** Older builds kept these providers only in the wire cache. Seed them
+     * before planning deletions when upgrading, or an empty old UI would erase
+     * the PC's favorites/history on the first automatic sync. */
+    fun upgradeCollections(localLibrary: Set<String>, localHistory: List<WatchProgress>, previous: JSONObject): Pair<Set<String>, List<WatchProgress>> {
+        val newlySupported = setOf("miruro", "animenosub", "ohli24")
+        val restoredLibrary = library(previous).filter { it.substringBefore(':') in newlySupported }
+        val restoredHistory = history(previous).filter { it.animeId.substringBefore(':') in newlySupported }
+        val mergedHistory = (localHistory + restoredHistory).sortedByDescending { it.updated }
+            .distinctBy { "${it.animeId}|${it.episodeKey}" }.take(300)
+        return (localLibrary + restoredLibrary) to mergedHistory
+    }
     fun library(local: JSONObject): Set<String> = local.optJSONObject("library")?.keys()?.asSequence()?.mapNotNull(::androidAnimeId)?.toSet() ?: emptySet()
     fun animeMetadata(local: JSONObject): Map<String, Anime> {
         val result = linkedMapOf<String, Anime>()

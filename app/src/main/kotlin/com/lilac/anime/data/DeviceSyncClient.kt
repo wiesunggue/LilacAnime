@@ -71,7 +71,7 @@ object DeviceSyncClient {
         val editor = prefs(context).edit().putString(KEY_URL, base).putString(KEY_TOKEN, encryptToken(context, token))
             .remove(KEY_REV).remove(KEY_SNAPSHOT)
         if (savedServer(context) != base) editor.remove(KEY_DATA)
-        editor.putInt(KEY_SCHEMA, 2).apply()
+        editor.putInt(KEY_SCHEMA, 3).apply()
         return "서버 연결 완료"
     }
 
@@ -87,12 +87,14 @@ object DeviceSyncClient {
         val token = decryptToken(context)
         require(base.isNotBlank() && token.isNotBlank()) { "먼저 동기화 서버에 연결하세요." }
         val p = prefs(context)
-        val migrated = p.getInt(KEY_SCHEMA, 0) == 2
+        val storedSchema = p.getInt(KEY_SCHEMA, 0)
+        val migrated = storedSchema in 2..3
         val previous = runCatching { JSONObject(p.getString(KEY_DATA, "{}") ?: "{}") }.getOrElse { JSONObject() }
         val before = if (migrated) runCatching { JSONObject(p.getString(KEY_SNAPSHOT, "{}") ?: "{}") }.getOrElse { JSONObject() } else JSONObject()
         val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
         val addedAt = added.keys().asSequence().associateWith { added.optLong(it, 1L) }
-        val local = DeviceSyncMapping.local(library, history, metadata, previous, addedAt)
+        val seeded = if (storedSchema == 2) DeviceSyncMapping.upgradeCollections(library, history, previous) else library to history
+        val local = DeviceSyncMapping.local(seeded.first, seeded.second, metadata, previous, addedAt)
         val outgoing = mutableListOf<JSONObject>()
         val now = System.currentTimeMillis()
         for (c in DeviceSyncMapping.collections) {
@@ -167,7 +169,7 @@ object DeviceSyncClient {
         }
         OfflineStore.saveLibrary(context, finalState.first)
         OfflineStore.saveWatchHistory(context, finalState.second)
-        p.edit().putInt(KEY_SCHEMA, 2).putLong(KEY_REV, rev)
+        p.edit().putInt(KEY_SCHEMA, 3).putLong(KEY_REV, rev)
             .putString(KEY_DATA, remote.toString()).putString(KEY_SNAPSHOT, DeviceSyncMapping.hashes(acknowledged).toString()).apply()
         SyncResult(finalState.first, finalState.second, sent, received, rev)
     } }

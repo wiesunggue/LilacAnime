@@ -99,6 +99,22 @@ class DeviceSyncMappingTest {
         assertEquals("miruro", metadata.getValue("miruro:x").source)
         assertEquals("ohli24", metadata.getValue("ohli24:x").source)
     }
+    @Test fun upgradeRestoresPreviouslyHiddenPcFavoritesBeforeDeletionPlanning() {
+        val oldWire = JSONObject("""{"library":{"miruro:x":{"mal_id":"miruro:x","title":"PC 보관 작품"}},"history":{"miruro:https://www.miruro.to/watch/x?ep=1":{"key":"miruro:https://www.miruro.to/watch/x?ep=1","anime":{"mal_id":"miruro:x"},"episode":{"number":1},"progress":42,"updated":100}}}""")
+        val restored = DeviceSyncMapping.upgradeCollections(setOf("123"), emptyList(), oldWire)
+        assertEquals(setOf("123", "miruro:x"), restored.first)
+        assertEquals(.42f, restored.second.single().progress, .0001f)
+        val outgoing = DeviceSyncMapping.local(restored.first, restored.second, emptyMap(), oldWire)
+        assertTrue(outgoing.getJSONObject("library").has("miruro:x"))
+        assertTrue(outgoing.getJSONObject("history").has("miruro:https://www.miruro.to/watch/x?ep=1"))
+    }
+    @Test fun upgradeKeepsNewerLocalProgressAndDoesNotResurrectSupportedDeletions() {
+        val oldWire = JSONObject("""{"library":{"linkani:12":{"mal_id":"linkani:12"}},"history":{"miruro:https://www.miruro.to/watch/x?ep=1":{"key":"miruro:https://www.miruro.to/watch/x?ep=1","anime":{"mal_id":"miruro:x"},"episode":{"number":1},"progress":10,"updated":100}}}""")
+        val local = WatchProgress("miruro:x", 1, .8f, "miruro:x:1", 200L)
+        val restored = DeviceSyncMapping.upgradeCollections(emptySet(), listOf(local), oldWire)
+        assertTrue(restored.first.isEmpty())
+        assertEquals(local, restored.second.single())
+    }
     @Test fun tombstonesRemoveTheExactWireKey() {
         val local = DeviceSyncMapping.local(setOf("123"), emptyList(), emptyMap(), JSONObject())
         val result = DeviceSyncMapping.merge(local, listOf(JSONObject("""{"collection":"library","id":"linkani:123","updated":200,"deleted":true}""")))
