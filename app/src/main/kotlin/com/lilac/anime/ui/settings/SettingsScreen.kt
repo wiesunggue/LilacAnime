@@ -108,8 +108,12 @@ private fun DeviceSyncSettings(vm: AnimeViewModel) {
                 status = "동기화 중…"
                 scope.launch {
                     try {
-                        val result = DeviceSyncClient.sync(context, vm.library, vm.watchHistory)
-                        vm.applySyncedCollections(context, result.library, result.history)
+                        val library = vm.library.toSet()
+                        val history = vm.watchHistory.toList()
+                        val metadata = (library + history.map { it.animeId }).mapNotNull { id -> vm.getAnime(context, id)?.let { id to it.copy(episodes = vm.episodes(it)) } }.toMap()
+                        val result = DeviceSyncClient.sync(context, library, history, metadata,
+                            readFresh = { vm.library to vm.watchHistory },
+                            apply = { syncedLibrary, syncedHistory -> vm.applySyncedCollections(context, syncedLibrary, syncedHistory) })
                         status = "동기화 완료 · 보냄 ${result.sent}개 · 받음 ${result.received}개 · 리비전 ${result.revision}"
                     } catch (e: Exception) { status = e.message ?: "동기화에 실패했습니다." }
                     finally { busy = false }

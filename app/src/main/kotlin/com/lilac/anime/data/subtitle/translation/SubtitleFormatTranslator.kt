@@ -232,16 +232,11 @@ internal object SubtitleFormatTranslator {
         .replace("\\N", "\n")
         .trim()
 
-    private fun modelText(text: String, kind: String): String {
-        var value = text.replace("\r\n", "\n").replace('\r', '\n')
-        if (kind == "srt") value = value.replace("\n", "\\N")
-        value = value.replace(Regex("(?s)\\{[^}]*\\}"), "")
-        value = value.replace(Regex("(?is)<[^>]+>"), "")
-        return value.trim()
-    }
+    private fun modelText(text: String, kind: String): String =
+        SubtitleMarkup.plainText(text).replace("\n", "\\N")
 
     private fun restoreTags(original: String, translated: String, kind: String): String {
-        val normalized = translated.replace("\r\n", "\n").replace('\r', '\n')
+        val normalized = SubtitleMarkup.plainText(translated)
         return when (kind) {
             "ass" -> {
                 val tags = Regex("\\{[^}]*\\}").findAll(original).map { it.value }.toList()
@@ -249,8 +244,7 @@ internal object SubtitleFormatTranslator {
                 if (tags.isEmpty()) text else tags.joinToString("") + text
             }
             else -> {
-                val tags = Regex("(?is)<[^>]+>").findAll(original).map { it.value }.toList()
-                if (tags.isEmpty()) normalized else tags.joinToString("") + normalized
+                normalized.replace("\\N", "\n")
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.lilac.anime.player
 
+import com.lilac.anime.data.subtitle.translation.SubtitleMarkup
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -32,8 +33,6 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     companion object {
         private const val TAG = "LibassTranslationOverlay"
         private const val FRAME_INTERVAL_MS = 33L
-        private const val PREF_NAME = "lilac_offline_store"
-        private const val PREF_SUBTITLE_SIZE = "pref_subtitle_size"
 
         @Volatile
         private var activeOverlay: WeakReference<LibassTranslationOverlay>? = null
@@ -50,9 +49,6 @@ class LibassTranslationOverlay @JvmOverloads constructor(
             }
         }
     }
-
-    private val playerPrefs = context.applicationContext
-        .getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
     private var ass: Ass? = null
     private var track: AssTrack? = null
@@ -91,20 +87,9 @@ class LibassTranslationOverlay @JvmOverloads constructor(
         isFocusable = false
     }
 
-    /**
-     * Direct binding hook for Compose. The overlay also polls the persisted
-     * setting every rendered frame, so translated subtitle size still follows
-     * the normal slider even if a Compose recomposition is missed.
-     */
+    /** The PlayerScreen subtitleSize state is the single source of truth. */
     fun setSubtitleScale(percent: Float) {
         applySubtitleScale((percent / 100f).coerceIn(0.5f, 2.0f), force = true)
-    }
-
-    private fun persistedSubtitleScale(): Float =
-        (playerPrefs.getFloat(PREF_SUBTITLE_SIZE, 100f).coerceIn(50f, 200f) / 100f)
-
-    private fun refreshPersistedSubtitleScale() {
-        applySubtitleScale(persistedSubtitleScale(), force = false)
     }
 
     private fun applySubtitleScale(scale: Float, force: Boolean) {
@@ -158,7 +143,6 @@ class LibassTranslationOverlay @JvmOverloads constructor(
             val h = max(1, videoHeightPx)
             r.setStorageSize(w, h)
             r.setFrameSize(w, h)
-            subtitleScale = persistedSubtitleScale()
             r.setFontScale(subtitleScale)
 
             ass = a
@@ -297,7 +281,6 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     private fun renderFrame() {
         val r = renderer ?: return
         val t = track ?: return
-        refreshPersistedSubtitleScale()
         ensureBitmap()
         val target = bitmap ?: return
         if (target.isRecycled) return
@@ -416,10 +399,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if (fields.size >= 10) {
             return listOf(
                 readOrder.toString(), fields[0], fields[3], fields[4],
-                fields[5], fields[6], fields[7], fields[8], fields[9]
+                fields[5], fields[6], fields[7], fields[8], SubtitleMarkup.stripHtml(fields[9]).replace("\n", "\\N")
             ).joinToString(",")
         }
-        return listOf(readOrder.toString(), "0", "Default", "", "0", "0", "0", "", raw)
+        return listOf(readOrder.toString(), "0", "Default", "", "0", "0", "0", "", SubtitleMarkup.stripHtml(raw).replace("\n", "\\N"))
             .joinToString(",")
     }
 

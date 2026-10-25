@@ -10,7 +10,7 @@ object TranslationCache {
         val digest = MessageDigest.getInstance("SHA-256")
         val bytes = file.inputStream().use { it.readBytes() }
         val hash = digest.digest(bytes).joinToString("") { "%02x".format(it) }
-        return "${hash}_${provider}_${target}"
+        return "${hash}_${provider}_${target}_markup2"
     }
     fun get(context: Context, key: String): String? = File(context.filesDir, DIR).listFiles()?.firstOrNull { it.name.startsWith("$key.") && it.isFile && it.length() > 0 }?.absolutePath
     fun put(context: Context, key: String, path: String): String {

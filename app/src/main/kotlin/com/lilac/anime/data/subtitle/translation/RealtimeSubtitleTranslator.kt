@@ -131,6 +131,35 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         }
     }
 
+    /**
+     * Idempotently prepares the translator for the subtitle that mpv is actually
+     * using. This is intentionally safe to call from the PlayerScreen polling
+     * loop: it only rebuilds the session when the source/provider really changed.
+     */
+    suspend fun ensurePrepared(
+        path: String?,
+        positionMs: Long,
+        scope: CoroutineScope,
+        providerId: String = "local",
+    ) {
+        val normalized = path
+            ?.removePrefix("file://")
+            ?.let(::File)
+            ?.takeIf { it.isFile }
+            ?.absolutePath
+            ?: return
+        val wantedProvider = providerId.trim().lowercase().ifBlank { "local" }
+        val alreadyPrepared = lock.withLock {
+            sourcePath == normalized &&
+                activeProviderId == wantedProvider &&
+                sourceContent != null && cues.isNotEmpty() && worker?.isActive == true
+        }
+        if (!alreadyPrepared) {
+            Log.i(TAG, "SESSION_ENSURE_REPREPARE provider=$wantedProvider path=$normalized positionMs=$positionMs")
+            prepare(normalized, positionMs, scope, wantedProvider)
+        }
+    }
+
     /** Playback-time lookup only. Translation runs only in the prefetch worker. */
     suspend fun updatePlaybackPosition(positionMs: Long) {
         lock.withLock { prefetchPositionMs = positionMs.coerceAtLeast(0L) }
@@ -550,32 +579,10 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         ).joinToString(",")
     }
 
-    private fun modelText(text: String, kind: String): String {
-        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
-        val lineBreaksNormalized = if (kind in setOf("srt", "vtt", "sbv")) {
-            normalized.replace("\n", "\\N")
-        } else {
-            normalized
-        }
-        return lineBreaksNormalized
-            .replace(Regex("(?s)\\{[^{}]*\\}"), "")
-            .replace(Regex("(?is)<[^>]+>"), "")
-            .trim()
-    }
+    private fun modelText(text: String, kind: String): String =
+        SubtitleMarkup.plainText(text).replace("\n", "\\N")
 
-    private fun sanitizeTranslatedText(value: String): String = value
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')
-        .replace(Regex("(?is)<[^>]+>"), "")
-        .replace(Regex("(?s)\\{[^{}]*\\}"), "")
-        .replace(Regex("(?im)^\\s*<LILAC_\\d+>\\s*"), "")
-        .replace("&nbsp;", " ", true)
-        .replace("&amp;", "&", true)
-        .replace("&lt;", "<", true)
-        .replace("&gt;", ">", true)
-        .replace("&quot;", "\"", true)
-        .replace("&#39;", "'", true)
-        .trim()
+    private fun sanitizeTranslatedText(value: String): String = SubtitleMarkup.plainText(value)
 
     private fun restoreTags(original: String, translated: String, kind: String): String {
         val normalized = sanitizeTranslatedText(translated)

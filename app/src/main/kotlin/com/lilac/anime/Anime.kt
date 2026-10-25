@@ -95,5 +95,6 @@ data class WatchProgress(
     val episodeNumber: Int,
     val progress: Float,
     // 숫자만으로는 4화와 4a화를 구분할 수 없으므로 실제 회차 키를 함께 저장한다.
-    val episodeKey: String = episodeNumber.toString()
+    val episodeKey: String = episodeNumber.toString(),
+    val updated: Long = 0L
 )

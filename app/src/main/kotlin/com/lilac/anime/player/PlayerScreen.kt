@@ -307,6 +307,10 @@ fun PlayerScreen(
     var realtimeSubtitleText by remember { mutableStateOf("") }
     var libassTranslationOverlay by remember { mutableStateOf<LibassTranslationOverlay?>(null) }
 
+    LaunchedEffect(subtitleSize, libassTranslationOverlay) {
+        libassTranslationOverlay?.setSubtitleScale(subtitleSize)
+    }
+
     fun subtitlePreferencePrefs() = context.getSharedPreferences("lilac_subtitle_preferences", Context.MODE_PRIVATE)
     fun subtitleTrackKey(track: SubtitleTrack): String = "${track.language.trim().lowercase(Locale.ROOT)}|${track.label.trim().lowercase(Locale.ROOT)}"
 
@@ -508,7 +512,8 @@ fun PlayerScreen(
     LaunchedEffect(localSubtitle, currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider) {
         realtimeSubtitleText = ""
         if (subtitleTranslationMode == "korean") {
-            realtimeTranslator.prepare(localSubtitle, engine.currentPosition, playerScope, vm.playerSettings.translationProvider)
+            val source = engine.currentSubtitleFilePath ?: localSubtitle
+            realtimeTranslator.prepare(source, engine.currentPosition, playerScope, vm.playerSettings.translationProvider)
             setSubtitleVisibleForMode(false)
             realtimeTranslator.updatePlaybackPosition(engine.currentPosition)
         } else {
@@ -538,6 +543,12 @@ fun PlayerScreen(
         }
         while (isActive) {
             val source = engine.currentSubtitleFilePath ?: localSubtitle
+            realtimeTranslator.ensurePrepared(
+                source,
+                engine.currentPosition,
+                playerScope,
+                vm.playerSettings.translationProvider,
+            )
             libassTranslationOverlay?.setSource(source)
             realtimeTranslator.consumeReadyTranslatedEvents().forEach { event ->
                 libassTranslationOverlay?.addTranslatedEvent(
@@ -1848,6 +1859,7 @@ fun PlayerScreen(
             factory = { ctx ->
                 LibassTranslationOverlay(ctx).also { view ->
                     libassTranslationOverlay = view
+                    view.setSubtitleScale(subtitleSize)
                     view.setSource(engine.currentSubtitleFilePath ?: localSubtitle)
                     val aspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
                         ?: if (engine.videoDisplayWidth > 0 && engine.videoDisplayHeight > 0) {
@@ -1861,6 +1873,7 @@ fun PlayerScreen(
             },
             update = { view ->
                 libassTranslationOverlay = view
+                view.setSubtitleScale(subtitleSize)
                 val aspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
                     ?: if (engine.videoDisplayWidth > 0 && engine.videoDisplayHeight > 0) {
                         engine.videoDisplayWidth.toDouble() / engine.videoDisplayHeight.toDouble()
