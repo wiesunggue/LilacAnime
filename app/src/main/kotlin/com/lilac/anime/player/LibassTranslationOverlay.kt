@@ -1,5 +1,6 @@
 package com.lilac.anime.player
 
+import com.lilac.anime.data.subtitle.translation.SubtitleMarkup
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -13,6 +14,8 @@ import io.github.peerless2012.ass.AssRender
 import io.github.peerless2012.ass.AssTexType
 import io.github.peerless2012.ass.AssTrack
 import java.io.File
+import java.lang.ref.WeakReference
+import java.nio.charset.Charset
 import kotlin.math.max
 
 /**
@@ -30,6 +33,21 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     companion object {
         private const val TAG = "LibassTranslationOverlay"
         private const val FRAME_INTERVAL_MS = 33L
+
+        @Volatile
+        private var activeOverlay: WeakReference<LibassTranslationOverlay>? = null
+
+        /**
+         * Translation mode is controlled by PlayerScreen/RealtimeSubtitleTranslator,
+         * while this AndroidView lives independently. Clearing through the active
+         * overlay prevents old translated events from remaining visible after the
+         * user returns to the original subtitle mode or changes subtitle sessions.
+         */
+        fun clearActiveTranslatedOverlay() {
+            activeOverlay?.get()?.let { view ->
+                view.post { view.clear() }
+            }
+        }
     }
 
     private var ass: Ass? = null
@@ -42,7 +60,8 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     private var playing = false
     private var positionMs = 0L
     private var syncWallClockMs = 0L
-    private var events = emptyList<EventRange>()
+    private val events = mutableListOf<EventRange>()
+    private val eventKeys = mutableSetOf<String>()
     private var renderPosted = false
     private var hasRenderedFrame = false
     private var nextReadOrder = 0
@@ -51,6 +70,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     private var videoTop = 0
     private var videoWidthPx = 0
     private var videoHeightPx = 0
+    private var subtitleScale = 1.0f
 
     private val renderRunnable = Runnable {
         renderPosted = false
@@ -60,19 +80,39 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     private data class EventRange(val startMs: Long, val endMs: Long)
 
     init {
+        activeOverlay = WeakReference(this)
         setBackgroundColor(Color.TRANSPARENT)
         scaleType = ScaleType.FIT_XY
         isClickable = false
         isFocusable = false
     }
 
+    /** The PlayerScreen subtitleSize state is the single source of truth. */
+    fun setSubtitleScale(percent: Float) {
+        applySubtitleScale((percent / 100f).coerceIn(0.5f, 2.0f), force = true)
+    }
+
+    private fun applySubtitleScale(scale: Float, force: Boolean) {
+        if (!force && kotlin.math.abs(subtitleScale - scale) < 0.001f) return
+        subtitleScale = scale
+        renderer?.let { render ->
+            runCatching { render.setFontScale(scale) }
+                .onFailure { Log.e(TAG, "LIBASS_SET_FONT_SCALE_FAILED scale=$scale", it) }
+        }
+        if (isReady()) scheduleRender()
+    }
+
     fun setSource(path: String?) {
-        val normalized = path?.removePrefix("file://")?.takeIf { File(it).isFile }
-        if (normalized == sourcePath) return
+        val normalized = path
+            ?.removePrefix("file://")
+            ?.takeIf { File(it).isFile }
+            ?.let { File(it).absolutePath }
+        if (normalized == sourcePath && isReady()) return
 
         releaseLibass()
         sourcePath = normalized
-        events = emptyList()
+        events.clear()
+        eventKeys.clear()
         hasRenderedFrame = false
         nextReadOrder = 0
         setImageDrawable(null)
@@ -80,8 +120,8 @@ class LibassTranslationOverlay @JvmOverloads constructor(
         if (normalized == null) return
 
         val file = File(normalized)
-        val content = runCatching { file.readText(Charsets.UTF_8) }.getOrElse {
-            Log.e(TAG, "READ_SOURCE_FAILED", it)
+        val content = readSubtitleText(file) ?: run {
+            Log.e(TAG, "READ_SOURCE_FAILED path=${file.absolutePath}")
             sourcePath = null
             return
         }
@@ -103,10 +143,12 @@ class LibassTranslationOverlay @JvmOverloads constructor(
             val h = max(1, videoHeightPx)
             r.setStorageSize(w, h)
             r.setFrameSize(w, h)
+            r.setFontScale(subtitleScale)
 
             ass = a
             track = t
             renderer = r
+            Log.i(TAG, "LIBASS_SOURCE_READY path=${file.name} scale=$subtitleScale size=${w}x$h")
         }.onFailure {
             Log.e(TAG, "LIBASS_CREATE_FAILED", it)
             releaseLibass()
@@ -116,17 +158,21 @@ class LibassTranslationOverlay @JvmOverloads constructor(
 
     /** Adds exactly one translated event to the in-memory libass track. */
     fun addTranslatedEvent(eventData: String, startMs: Long, endMs: Long) {
-        val t = track ?: return
         if (endMs <= startMs) return
+        val dedupeKey = "$startMs:$endMs:${eventData.hashCode()}"
+        if (dedupeKey in eventKeys) return
 
+        val t = track ?: return
+        eventKeys += dedupeKey
         runCatching {
             val payload = toMatroskaEventPacket(eventData, nextReadOrder++)
             val bytes = payload.toByteArray(Charsets.UTF_8)
             Log.i(TAG, "LIBASS_ADD_EVENT ro=${nextReadOrder - 1} start=$startMs end=$endMs payload=${payload.take(160)}")
             t.readChunk(startMs.coerceAtLeast(0L), endMs - startMs, bytes)
-            events = events + EventRange(startMs, endMs)
+            events.add(EventRange(startMs, endMs))
             scheduleRender()
         }.onFailure {
+            eventKeys.remove(dedupeKey)
             Log.e(TAG, "LIBASS_ADD_EVENT_FAILED start=$startMs end=$endMs", it)
         }
     }
@@ -134,11 +180,9 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     fun isReady(): Boolean = track != null && renderer != null
 
     fun hasActiveTranslatedEvent(positionMs: Long): Boolean =
-        events.any { positionMs >= it.startMs && positionMs <= it.endMs }
+        events.any { positionMs >= it.startMs && positionMs < it.endMs }
 
-    /** Sets the actual displayed video aspect ratio. The overlay itself may fill the
-     * whole device, but libass is rendered only inside the video's letterboxed area.
-     */
+    /** Sets the actual displayed video aspect ratio. */
     fun setVideoAspectRatio(aspectRatio: Double) {
         val normalized = aspectRatio.takeIf { it.isFinite() && it > 0.01 } ?: return
         if (kotlin.math.abs(videoAspectRatio - normalized) < 0.001) return
@@ -164,8 +208,10 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     fun clear() {
         releaseLibass()
         sourcePath = null
-        events = emptyList()
+        events.clear()
+        eventKeys.clear()
         hasRenderedFrame = false
+        nextReadOrder = 0
         setImageDrawable(null)
     }
 
@@ -179,6 +225,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
             runCatching {
                 renderer?.setStorageSize(videoWidthPx, videoHeightPx)
                 renderer?.setFrameSize(videoWidthPx, videoHeightPx)
+                renderer?.setFontScale(subtitleScale)
             }.onFailure { Log.e(TAG, "LIBASS_SET_SIZE_FAILED", it) }
         }
     }
@@ -271,27 +318,16 @@ class LibassTranslationOverlay @JvmOverloads constructor(
         }
 
         if (frame != null) {
-            var imageCount = 0
             val images = frame.images.orEmpty().mapNotNull { tex ->
                 val src = tex.bitmap
                 if (src != null && !src.isRecycled && tex.w > 0 && tex.h > 0) {
                     Triple(src, tex.x, tex.y)
-                } else {
-                    null
-                }
+                } else null
             }
-            imageCount = images.size
+            val imageCount = images.size
             if (imageCount > 0) {
                 val canvas = Canvas(target)
                 canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
-
-                // libass can return glyph/effect bitmaps whose bounds extend
-                // slightly outside the nominal video frame (for example large
-                // outlines, shadows, blur, or transformed ASS drawings). The
-                // Android overlay itself covers the whole screen, so without an
-                // explicit clip those pixels can be painted into the mpv
-                // letterbox/pillarbox area. Keep every libass pixel strictly
-                // inside the actual video viewport.
                 val saveCount = canvas.save()
                 canvas.clipRect(
                     videoLeft,
@@ -309,23 +345,14 @@ class LibassTranslationOverlay @JvmOverloads constructor(
                 }
                 canvas.restoreToCount(saveCount)
             }
-            Log.i(TAG, "LIBASS_FRAME time=$renderPosition changed=${frame.changed} images=$imageCount active=$active")
+            Log.i(TAG, "LIBASS_FRAME time=$renderPosition changed=${frame.changed} images=$imageCount active=$active scale=$subtitleScale")
             if (imageCount > 0) {
-                // libass may return changed=0/images=0 on subsequent frames when
-                // the subtitle image has not changed. That does NOT mean the
-                // subtitle disappeared. Keep the previous Bitmap until libass
-                // reports a changed frame with no images, or the event is no
-                // longer active.
                 setImageBitmap(target)
                 hasRenderedFrame = true
-            } else if (frame.changed != 0) {
-                // A changed frame with no images means the active subtitle
-                // composition really became empty.
-                if (hasRenderedFrame) {
-                    target.eraseColor(Color.TRANSPARENT)
-                    setImageDrawable(null)
-                    hasRenderedFrame = false
-                }
+            } else if (frame.changed != 0 && hasRenderedFrame) {
+                target.eraseColor(Color.TRANSPARENT)
+                setImageDrawable(null)
+                hasRenderedFrame = false
             }
         }
 
@@ -370,17 +397,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             .trimStart()
         val fields = raw.split(',', limit = 10)
         if (fields.size >= 10) {
-            // ASS file format: Layer, Start, End, Style, Name, MarginL,
-            // MarginR, MarginV, Effect, Text.
-            // ass_process_chunk format: ReadOrder, Layer, Style, Name,
-            // MarginL, MarginR, MarginV, Effect, Text.
             return listOf(
                 readOrder.toString(), fields[0], fields[3], fields[4],
-                fields[5], fields[6], fields[7], fields[8], fields[9]
+                fields[5], fields[6], fields[7], fields[8], SubtitleMarkup.stripHtml(fields[9]).replace("\n", "\\N")
             ).joinToString(",")
         }
-        return listOf(readOrder.toString(), "0", "Default", "", "0", "0", "0", "", raw)
+        return listOf(readOrder.toString(), "0", "Default", "", "0", "0", "0", "", SubtitleMarkup.stripHtml(raw).replace("\n", "\\N"))
             .joinToString(",")
+    }
+
+    private fun readSubtitleText(file: File): String? {
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        if (bytes.isEmpty()) return null
+        val candidates = mutableListOf<Charset>()
+        when {
+            bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte() -> candidates += Charsets.UTF_8
+            bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> candidates += Charsets.UTF_16LE
+            bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> candidates += Charsets.UTF_16BE
+            else -> candidates += listOf(Charsets.UTF_8, Charset.forName("Shift_JIS"), Charset.forName("EUC-KR"), Charsets.UTF_16LE, Charsets.UTF_16BE)
+        }
+        return candidates.distinct().mapNotNull { charset ->
+            runCatching { String(bytes, charset).removePrefix("\uFEFF") }.getOrNull()
+        }.maxByOrNull { decoded ->
+            val replacement = decoded.count { it == '\uFFFD' }
+            val controls = decoded.count { it.code in 0..8 || it.code in 14..31 }
+            decoded.length - replacement * 20 - controls * 20
+        }
     }
 
     private fun releaseLibass() {
@@ -403,7 +445,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
 
     override fun onDetachedFromWindow() {
-        releaseLibass()
+        if (activeOverlay?.get() === this) activeOverlay = null
+        clear()
         super.onDetachedFromWindow()
     }
 }

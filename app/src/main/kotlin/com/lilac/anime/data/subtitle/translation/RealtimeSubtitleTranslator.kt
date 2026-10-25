@@ -2,9 +2,10 @@ package com.lilac.anime.data.subtitle.translation
 
 import android.content.Context
 import android.util.Log
-import com.lilac.anime.ui.settings.AiRuntimeDiagnostics
 import com.lilac.anime.data.subtitle.translation.providers.LocalTranslator
-import com.lilac.anime.data.subtitle.translation.SecureApiKeyStore
+import com.lilac.anime.player.LibassTranslationOverlay
+import com.lilac.anime.player.MpvPlaybackManager
+import com.lilac.anime.ui.settings.AiRuntimeDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,12 +15,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.nio.charset.Charset
 
 class RealtimeSubtitleTranslator(private val context: Context) {
-    private data class Cue(val startMs: Long, val endMs: Long, val text: String, val kind: String, val index: Int)
+    private data class Cue(
+        val startMs: Long,
+        val endMs: Long,
+        val text: String,
+        val kind: String,
+        val index: Int,
+    )
 
     private val lock = Mutex()
-    private val translationLock = Mutex()
+
+    // Blocking OkHttp/provider calls may outlive coroutine cancellation. A fresh
+    // mutex is assigned to every subtitle session so an old request cannot hold
+    // the next episode's translation queue hostage until its network timeout.
+    private var translationLock = Mutex()
+
     private var activeProvider: TranslationProvider = LocalTranslator(context)
     private var activeProviderId: String = "local"
     private var sessionProvider: TranslationSessionProvider? = null
@@ -27,92 +40,157 @@ class RealtimeSubtitleTranslator(private val context: Context) {
     private val cache = LinkedHashMap<String, String>(256, 0.75f, true)
     private var cues: List<Cue> = emptyList()
     private var sourceContent: String? = null
+    private var sourcePath: String? = null
     private var worker: Job? = null
     private var prefetchPositionMs: Long = 0L
     private var generation = 0
-    private var offlineParseWarningLogged = false
-    private val emittedTranslationKeys = mutableSetOf<String>()
 
     data class ReadyEvent(
         val key: String,
         val startMs: Long,
         val endMs: Long,
-        val assEventData: String
+        val assEventData: String,
     )
 
-    suspend fun prepare(path: String?, positionMs: Long, scope: CoroutineScope, providerId: String = "local") {
-        val file = path?.let(::File)?.takeIf { it.isFile }
+    suspend fun prepare(
+        path: String?,
+        positionMs: Long,
+        scope: CoroutineScope,
+        providerId: String = "local",
+    ) {
+        // PlayerScreen used to pass localSubtitle while the overlay rendered
+        // engine.currentSubtitleFilePath. When those differed, translation was
+        // performed against a stale/empty file. Always prefer the actual mpv
+        // external subtitle file when it exists.
+        val requestedPath = path?.removePrefix("file://")
+        val enginePath = MpvPlaybackManager.currentEngineOrNull()
+            ?.currentSubtitleFilePath
+            ?.removePrefix("file://")
+        val resolvedPath = sequenceOf(enginePath, requestedPath)
+            .filterNotNull()
+            .map { File(it) }
+            .firstOrNull { it.isFile }
+            ?.absolutePath
+
+        val file = resolvedPath?.let(::File)
         if (file == null) {
-            Log.w("RealtimeSubtitleTranslator", "SESSION_PREPARE_NO_FILE provider=$providerId path=$path; clearing stale subtitle session")
+            Log.w(
+                TAG,
+                "SESSION_PREPARE_NO_FILE provider=$providerId requested=$requestedPath engine=$enginePath; clearing stale subtitle session",
+            )
             clear()
             return
         }
-        val content = runCatching { file.readText(Charsets.UTF_8) }.getOrElse {
-            Log.e("RealtimeSubtitleTranslator", "SESSION_READ_FAILED path=${file.absolutePath}", it)
+
+        val content = readSubtitleText(file)
+        if (content == null) {
+            Log.e(TAG, "SESSION_READ_FAILED path=${file.absolutePath}")
             clear()
             return
         }
+
         val parsed = runCatching { parse(content, file.extension.lowercase()) }
-            .onFailure { Log.e("RealtimeSubtitleTranslator", "PARSE_FAILED path=${file.absolutePath}", it) }
+            .onFailure { Log.e(TAG, "PARSE_FAILED path=${file.absolutePath}", it) }
             .getOrDefault(emptyList())
         if (parsed.isEmpty()) {
-            Log.w("RealtimeSubtitleTranslator", "PARSE_EMPTY path=${file.absolutePath} ext=${file.extension}")
+            Log.w(
+                TAG,
+                "PARSE_EMPTY path=${file.absolutePath} ext=${file.extension} requested=$requestedPath engine=$enginePath",
+            )
         }
+
+        // Remove translated images from the previous mode/session immediately.
+        LibassTranslationOverlay.clearActiveTranslatedOverlay()
+
         lock.withLock {
             generation++
             worker?.cancel()
             worker = null
+            translationLock = Mutex()
             cache.clear()
             sourceContent = content
-            emittedTranslationKeys.clear()
+            sourcePath = file.absolutePath
             cues = parsed
+            prefetchPositionMs = positionMs.coerceAtLeast(0L)
         }
-        if (sessionStarted) {
-            runCatching { sessionProvider?.endSession() }
-            sessionStarted = false
-        }
+
+        endProviderSessionQuietly()
+
         activeProviderId = providerId.trim().lowercase().ifBlank { "local" }
         activeProvider = TranslationManager.createProvider(context, activeProviderId)
-        Log.i("RealtimeSubtitleTranslator", "SESSION_PREPARE provider=$activeProviderId cues=${parsed.size} path=${file.name} positionMs=$positionMs")
         sessionProvider = activeProvider as? TranslationSessionProvider
-        val localGeneration = generation
-        prefetchPositionMs = positionMs
+        val localGeneration = lock.withLock { generation }
+
+        Log.i(
+            TAG,
+            "SESSION_PREPARE provider=$activeProviderId cues=${parsed.size} file=${file.name} requested=$requestedPath engine=$enginePath positionMs=$positionMs",
+        )
+
         worker = scope.launch(Dispatchers.IO) {
-            prefetchLoop(localGeneration, positionMs)
+            prefetchLoop(localGeneration, positionMs.coerceAtLeast(0L))
         }
     }
 
     /**
-     * Playback-time lookup only.
-     *
-     * Translation must never run synchronously from the subtitle event callback.
-     * The background prefetch worker is the only path allowed to call the model.
-     * This prevents a subtitle change from blocking playback and removes the old
-     * one-line/realtime translation behavior that competed with batch prefetch.
+     * Idempotently prepares the translator for the subtitle that mpv is actually
+     * using. This is intentionally safe to call from the PlayerScreen polling
+     * loop: it only rebuilds the session when the source/provider really changed.
      */
+    suspend fun ensurePrepared(
+        path: String?,
+        positionMs: Long,
+        scope: CoroutineScope,
+        providerId: String = "local",
+    ) {
+        val normalized = path
+            ?.removePrefix("file://")
+            ?.let(::File)
+            ?.takeIf { it.isFile }
+            ?.absolutePath
+            ?: return
+        val wantedProvider = providerId.trim().lowercase().ifBlank { "local" }
+        val alreadyPrepared = lock.withLock {
+            sourcePath == normalized &&
+                activeProviderId == wantedProvider &&
+                sourceContent != null && cues.isNotEmpty() && worker?.isActive == true
+        }
+        if (!alreadyPrepared) {
+            Log.i(TAG, "SESSION_ENSURE_REPREPARE provider=$wantedProvider path=$normalized positionMs=$positionMs")
+            prepare(normalized, positionMs, scope, wantedProvider)
+        }
+    }
+
+    /** Playback-time lookup only. Translation runs only in the prefetch worker. */
     suspend fun updatePlaybackPosition(positionMs: Long) {
-        // Playback events only advance the prefetch window. They never call the
-        // translator and never perform a one-line translation.
-        prefetchPositionMs = positionMs
+        lock.withLock { prefetchPositionMs = positionMs.coerceAtLeast(0L) }
     }
 
     suspend fun clear() {
-        lock.withLock {
+        val oldWorker = lock.withLock {
             generation++
-            worker?.cancel()
+            val old = worker
             worker = null
+            translationLock = Mutex()
             cache.clear()
             cues = emptyList()
             sourceContent = null
-            emittedTranslationKeys.clear()
-            if (sessionStarted) {
-                sessionProvider?.endSession()
-                sessionStarted = false
-            }
-            activeProviderId = "local"
-            activeProvider = LocalTranslator(context)
-            sessionProvider = null
+            sourcePath = null
+            prefetchPositionMs = 0L
+            old
         }
+        oldWorker?.cancel()
+        endProviderSessionQuietly()
+        activeProviderId = "local"
+        activeProvider = LocalTranslator(context)
+        sessionProvider = null
+        LibassTranslationOverlay.clearActiveTranslatedOverlay()
+    }
+
+    private suspend fun endProviderSessionQuietly() {
+        if (!sessionStarted) return
+        runCatching { sessionProvider?.endSession() }
+            .onFailure { Log.w(TAG, "SESSION_END_FAILED", it) }
+        sessionStarted = false
     }
 
     private suspend fun ensureSession() {
@@ -124,215 +202,329 @@ class RealtimeSubtitleTranslator(private val context: Context) {
 
     private suspend fun prefetchLoop(localGeneration: Int, initialPositionMs: Long) {
         var nextIndex = -1
+        var lastPositionMs = initialPositionMs
         val failures = mutableMapOf<String, Int>()
+
         while (true) {
             if (localGeneration != lock.withLock { generation }) return
             val snapshot = lock.withLock { cues }
-            if (snapshot.isEmpty()) return
+            if (snapshot.isEmpty()) {
+                delay(250L)
+                if (localGeneration != lock.withLock { generation }) return
+                continue
+            }
 
             val prefs = context.getSharedPreferences("lilac_offline_store", Context.MODE_PRIVATE)
             if (!prefs.getBoolean("pref_ai_prefetch_enabled", true)) {
-                Log.i("RealtimeSubtitleTranslator", "PREFETCH_DISABLED provider=$activeProviderId")
-                return
+                // Do not terminate the worker permanently. The setting can be
+                // enabled again while the same episode is still playing.
+                delay(500L)
+                continue
             }
+
             val prefetchAhead = prefs.getInt("pref_ai_prefetch_ahead", 10).coerceIn(0, 40)
             val contextCueCount = prefs.getInt("pref_ai_context_cues", 4).coerceIn(0, 6)
             val batchSize = prefs.getInt("pref_ai_batch_size", 5).coerceIn(2, 8)
             val position = lock.withLock { prefetchPositionMs }
-            val ordered = snapshot.sortedWith(compareBy<Cue> { it.startMs }.thenBy { it.endMs }.thenBy { it.index })
-            val currentIndex = ordered.indexOfFirst { it.startMs >= position - 500L }
+            val ordered = snapshot.sortedWith(
+                compareBy<Cue> { it.startMs }.thenBy { it.endMs }.thenBy { it.index },
+            )
+
+            // Anchor on cue end time, not cue start time. This includes a cue
+            // that is already on screen when Korean translation is enabled.
+            val currentIndex = ordered.indexOfFirst { it.endMs >= position - 250L }
                 .let { if (it < 0) ordered.lastIndex.coerceAtLeast(0) else it }
+
+            // Rewind prefetch after a backwards seek. The previous monotonic
+            // cursor could permanently skip an earlier cue that had failed or
+            // had never been translated.
+            if (position + 1500L < lastPositionMs) nextIndex = currentIndex
+            lastPositionMs = position
             if (nextIndex < currentIndex) nextIndex = currentIndex
+
             val windowEnd = (currentIndex + prefetchAhead + 1).coerceAtMost(ordered.size)
             if (nextIndex >= windowEnd) {
-                delay(200L)
+                delay(150L)
                 continue
             }
-            while (nextIndex < windowEnd && lock.withLock { cache.containsKey(cueCacheKey(ordered[nextIndex])) }) nextIndex++
+
+            while (
+                nextIndex < windowEnd &&
+                lock.withLock { cache.containsKey(cueCacheKey(ordered[nextIndex])) }
+            ) {
+                nextIndex++
+            }
             if (nextIndex >= windowEnd) continue
 
             val selectedProvider = activeProvider
-            val batchEnd = if (selectedProvider is LocalTranslator) nextIndex + 1
-                else minOf(windowEnd, nextIndex + batchSize)
+            val batchEnd = if (selectedProvider is LocalTranslator) {
+                nextIndex + 1
+            } else {
+                minOf(windowEnd, nextIndex + batchSize)
+            }
             val batch = mutableListOf<Cue>()
             for (candidate in ordered.subList(nextIndex, batchEnd)) {
-                val cachedAlready = lock.withLock { cache.containsKey(cueCacheKey(candidate)) }
-                if (!cachedAlready) batch += candidate
+                if (!lock.withLock { cache.containsKey(cueCacheKey(candidate)) }) {
+                    batch += candidate
+                }
             }
             nextIndex = batchEnd
             if (batch.isEmpty()) continue
             if (localGeneration != lock.withLock { generation }) return
 
-            Log.i("RealtimeSubtitleTranslator", "PREFETCH_BATCH_BEGIN provider=$activeProviderId size=${batch.size} firstCue=${batch.first().index} lastCue=${batch.last().index} position=$position")
+            Log.i(
+                TAG,
+                "PREFETCH_BATCH_BEGIN provider=$activeProviderId size=${batch.size} firstCue=${batch.first().index} lastCue=${batch.last().index} position=$position",
+            )
+
             try {
-                translationLock.withLock {
+                val sessionMutex = translationLock
+                sessionMutex.withLock {
                     ensureSession()
-                    if (localGeneration != lock.withLock { generation }) throw CancellationException("subtitle session changed")
+                    if (localGeneration != lock.withLock { generation }) {
+                        throw CancellationException("subtitle session changed")
+                    }
+
                     if (selectedProvider is LocalTranslator) {
-                        val cue = batch.first()
-                        val orderedIndex = ordered.indexOf(cue)
-                        val contextStart = (orderedIndex - contextCueCount).coerceAtLeast(0)
-                        val contextCues = ordered.subList(contextStart, orderedIndex)
-                        val contextMemory = contextCues.map { previous ->
-                            LocalTranslator.LocalAiContext(
-                                source = modelText(previous.text, previous.kind),
-                                translation = lock.withLock { cache[cueCacheKey(previous)] }
-                            )
-                        }
-                        val futureLines = ordered.subList(orderedIndex + 1, (orderedIndex + 3).coerceAtMost(ordered.size))
-                            .map { modelText(it.text, it.kind) }
-                        val source = modelText(cue.text, cue.kind)
-                        Log.i("RealtimeSubtitleTranslator", "PREFETCH_TRANSLATE provider=$activeProviderId cue=${cue.index} contextCount=${contextMemory.size}")
-                        val result = selectedProvider.translateWithContext(source, contextMemory, futureLines).trim()
-                        if (result.isBlank()) error("번역 결과가 비어 있습니다.")
-                        lock.withLock { if (localGeneration == generation) cache[cueCacheKey(cue)] = result }
+                        translateLocalCue(
+                            provider = selectedProvider,
+                            cue = batch.first(),
+                            ordered = ordered,
+                            contextCueCount = contextCueCount,
+                            localGeneration = localGeneration,
+                        )
                     } else {
-                        val sources = batch.map { modelText(it.text, it.kind) }
-                        Log.i("RealtimeSubtitleTranslator", "PREFETCH_TRANSLATE_BATCH provider=$activeProviderId model=${batch.size} cues=${batch.joinToString { it.index.toString() }}")
-                        try {
-                            val results = translateCloudBatchWithFallback(selectedProvider, sources)
-                            if (results.size != batch.size || results.any { it.isBlank() }) {
-                                error("번역 응답 줄 수/내용 불일치 expected=${batch.size} actual=${results.size}")
-                            }
-                            lock.withLock {
-                                if (localGeneration == generation) batch.indices.forEach { i -> cache[cueCacheKey(batch[i])] = results[i].trim() }
-                            }
-                            Log.i("RealtimeSubtitleTranslator", "PREFETCH_TRANSLATE_BATCH_OK provider=$activeProviderId count=${results.size}")
-                        } catch (batchError: Throwable) {
-                            if (batchError is CancellationException) throw batchError
-                            Log.w("RealtimeSubtitleTranslator", "PREFETCH_BATCH_FALLBACK provider=$activeProviderId count=${batch.size} reason=${batchError.message}", batchError)
-                            // A batch-format/model limit should not discard the whole window.
-                            // Retry each cue individually and cache successful items only.
-                            for (cue in batch) {
-                                if (localGeneration != lock.withLock { generation }) throw CancellationException("subtitle session changed")
-                                try {
-                                    val single = translateCloudBatchWithFallback(
-                                        selectedProvider,
-                                        listOf(modelText(cue.text, cue.kind))
-                                    ).firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
-                                        ?: error("단일 자막 번역 결과가 비어 있습니다.")
-                                    lock.withLock { if (localGeneration == generation) cache[cueCacheKey(cue)] = single }
-                                    Log.i("RealtimeSubtitleTranslator", "PREFETCH_SINGLE_FALLBACK_OK provider=$activeProviderId cue=${cue.index}")
-                                } catch (singleError: Throwable) {
-                                    if (singleError is CancellationException) throw singleError
-                                    val key = cueCacheKey(cue)
-                                    val attempt = (failures[key] ?: 0) + 1
-                                    failures[key] = attempt
-                                    Log.e("RealtimeSubtitleTranslator", "PREFETCH_SINGLE_FALLBACK_FAILED provider=$activeProviderId cue=${cue.index} attempt=$attempt", singleError)
-                                    if (attempt < 3) nextIndex = minOf(nextIndex, ordered.indexOf(cue))
-                                    else AiRuntimeDiagnostics.record(context, "실시간 자막 단일 번역 ($activeProviderId, cue=${cue.index})", singleError)
-                                }
-                            }
-                        }
+                        translateCloudCues(
+                            selectedProvider = selectedProvider,
+                            batch = batch,
+                            ordered = ordered,
+                            failures = failures,
+                            localGeneration = localGeneration,
+                            onRetryIndex = { retry -> nextIndex = minOf(nextIndex, retry) },
+                        )
                     }
                 }
-            } catch (e: CancellationException) {
-                Log.d("RealtimeSubtitleTranslator", "PREFETCH_CANCELLED provider=$activeProviderId")
-                throw e
-            } catch (t: Throwable) {
-                Log.e("RealtimeSubtitleTranslator", "PREFETCH_BATCH_FAILED provider=$activeProviderId cues=${batch.joinToString { it.index.toString() }}", t)
+            } catch (error: CancellationException) {
+                Log.d(TAG, "PREFETCH_CANCELLED provider=$activeProviderId")
+                throw error
+            } catch (error: Throwable) {
+                Log.e(
+                    TAG,
+                    "PREFETCH_BATCH_FAILED provider=$activeProviderId cues=${batch.joinToString { it.index.toString() }}",
+                    error,
+                )
                 var exhausted = false
                 batch.forEach { cue ->
                     val key = cueCacheKey(cue)
                     val attempt = (failures[key] ?: 0) + 1
                     failures[key] = attempt
-                    if (attempt < 3) nextIndex = minOf(nextIndex, ordered.indexOf(cue))
-                    else {
+                    if (attempt < 3) {
+                        nextIndex = minOf(nextIndex, ordered.indexOf(cue))
+                    } else {
                         exhausted = true
-                        Log.e("RealtimeSubtitleTranslator", "PREFETCH_GIVE_UP provider=$activeProviderId cue=${cue.index} attempts=$attempt")
+                        Log.e(TAG, "PREFETCH_GIVE_UP provider=$activeProviderId cue=${cue.index} attempts=$attempt")
                     }
                 }
-                if (exhausted) AiRuntimeDiagnostics.record(context, "실시간 자막 번역 ($activeProviderId)", t)
+                if (exhausted) {
+                    AiRuntimeDiagnostics.record(context, "실시간 자막 번역 ($activeProviderId)", error)
+                }
                 delay(if (activeProviderId == "local") 500L else 2000L)
             }
         }
     }
 
-    /**
-     * Desktop translation tries the selected cloud API first, then other configured cloud APIs when
-     * a provider is unavailable or its quota/model fails. Android previously called only the chosen
-     * provider in the playback prefetch worker, so one bad key or exhausted quota stalled the rest
-     * of the episode even when another API key was already saved.
-     */
+    private suspend fun translateLocalCue(
+        provider: LocalTranslator,
+        cue: Cue,
+        ordered: List<Cue>,
+        contextCueCount: Int,
+        localGeneration: Int,
+    ) {
+        val orderedIndex = ordered.indexOf(cue)
+        val contextStart = (orderedIndex - contextCueCount).coerceAtLeast(0)
+        val contextCues = ordered.subList(contextStart, orderedIndex)
+        val contextMemory = contextCues.map { previous ->
+            LocalTranslator.LocalAiContext(
+                source = modelText(previous.text, previous.kind),
+                translation = lock.withLock { cache[cueCacheKey(previous)] },
+            )
+        }
+        val futureLines = ordered
+            .subList(orderedIndex + 1, (orderedIndex + 3).coerceAtMost(ordered.size))
+            .map { modelText(it.text, it.kind) }
+        val source = modelText(cue.text, cue.kind)
+        Log.i(TAG, "PREFETCH_TRANSLATE provider=$activeProviderId cue=${cue.index} contextCount=${contextMemory.size}")
+        val result = provider.translateWithContext(source, contextMemory, futureLines).trim()
+        if (result.isBlank()) error("번역 결과가 비어 있습니다.")
+        lock.withLock {
+            if (localGeneration == generation) cache[cueCacheKey(cue)] = result
+        }
+    }
+
+    private suspend fun translateCloudCues(
+        selectedProvider: TranslationProvider,
+        batch: List<Cue>,
+        ordered: List<Cue>,
+        failures: MutableMap<String, Int>,
+        localGeneration: Int,
+        onRetryIndex: (Int) -> Unit,
+    ) {
+        val sources = batch.map { modelText(it.text, it.kind) }
+        Log.i(
+            TAG,
+            "PREFETCH_TRANSLATE_BATCH provider=$activeProviderId model=${batch.size} cues=${batch.joinToString { it.index.toString() }}",
+        )
+
+        try {
+            val results = translateCloudBatchWithFallback(selectedProvider, sources)
+            if (results.size != batch.size || results.any { it.isBlank() }) {
+                error("번역 응답 줄 수/내용 불일치 expected=${batch.size} actual=${results.size}")
+            }
+            lock.withLock {
+                if (localGeneration == generation) {
+                    batch.indices.forEach { index ->
+                        cache[cueCacheKey(batch[index])] = results[index].trim()
+                    }
+                }
+            }
+            Log.i(TAG, "PREFETCH_TRANSLATE_BATCH_OK provider=$activeProviderId count=${results.size}")
+        } catch (batchError: Throwable) {
+            if (batchError is CancellationException) throw batchError
+            Log.w(
+                TAG,
+                "PREFETCH_BATCH_FALLBACK provider=$activeProviderId count=${batch.size} reason=${batchError.message}",
+                batchError,
+            )
+
+            // A batch-format/model-limit failure should not discard the whole
+            // prefetch window. Retry each cue individually.
+            for (cue in batch) {
+                if (localGeneration != lock.withLock { generation }) {
+                    throw CancellationException("subtitle session changed")
+                }
+                try {
+                    val single = translateCloudBatchWithFallback(
+                        selectedProvider,
+                        listOf(modelText(cue.text, cue.kind)),
+                    ).firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
+                        ?: error("단일 자막 번역 결과가 비어 있습니다.")
+                    lock.withLock {
+                        if (localGeneration == generation) cache[cueCacheKey(cue)] = single
+                    }
+                    Log.i(TAG, "PREFETCH_SINGLE_FALLBACK_OK provider=$activeProviderId cue=${cue.index}")
+                } catch (singleError: Throwable) {
+                    if (singleError is CancellationException) throw singleError
+                    val key = cueCacheKey(cue)
+                    val attempt = (failures[key] ?: 0) + 1
+                    failures[key] = attempt
+                    Log.e(
+                        TAG,
+                        "PREFETCH_SINGLE_FALLBACK_FAILED provider=$activeProviderId cue=${cue.index} attempt=$attempt",
+                        singleError,
+                    )
+                    if (attempt < 3) {
+                        onRetryIndex(ordered.indexOf(cue))
+                    } else {
+                        AiRuntimeDiagnostics.record(
+                            context,
+                            "실시간 자막 단일 번역 ($activeProviderId, cue=${cue.index})",
+                            singleError,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private suspend fun translateCloudBatchWithFallback(
         primaryProvider: TranslationProvider,
-        lines: List<String>
+        lines: List<String>,
     ): List<String> {
         val primaryId = primaryProvider.id.lowercase()
-        val providerIds = (listOf(primaryId) + listOf("gemini", "openai", "deepl", "qwen").filter { it != primaryId }).distinct()
+        val providerIds = (
+            listOf(primaryId) +
+                listOf("gemini", "openai", "deepl", "qwen").filter { it != primaryId }
+            ).distinct()
         val failures = mutableListOf<String>()
         var lastError: Throwable? = null
 
         for (providerId in providerIds) {
             if (providerId != primaryId && !SecureApiKeyStore.has(context, providerId)) continue
-            val provider = if (providerId == primaryId) primaryProvider
-                else TranslationManager.createProvider(context, providerId)
-            var providerSucceeded = false
+            val provider = if (providerId == primaryId) {
+                primaryProvider
+            } else {
+                TranslationManager.createProvider(context, providerId)
+            }
 
             for (attempt in 0..2) {
                 try {
-                    Log.i("RealtimeSubtitleTranslator", "CLOUD_PROVIDER_ATTEMPT provider=$providerId attempt=${attempt + 1}/${3} lines=${lines.size}")
+                    Log.i(
+                        TAG,
+                        "CLOUD_PROVIDER_ATTEMPT provider=$providerId attempt=${attempt + 1}/3 lines=${lines.size}",
+                    )
                     val results = provider.translateBatch(lines)
                     if (results.size != lines.size || results.any { it.isBlank() }) {
                         error("$providerId 응답 줄 수/내용 불일치 expected=${lines.size} actual=${results.size}")
                     }
                     if (providerId != primaryId) {
-                        Log.w("RealtimeSubtitleTranslator", "CLOUD_PROVIDER_FALLBACK_SUCCESS requested=$primaryId used=$providerId lines=${lines.size}")
-                        // Keep using the provider that worked for the rest of this subtitle session;
-                        // otherwise every batch would repeat a known-bad key/quota request.
+                        Log.w(
+                            TAG,
+                            "CLOUD_PROVIDER_FALLBACK_SUCCESS requested=$primaryId used=$providerId lines=${lines.size}",
+                        )
                         activeProvider = provider
                         activeProviderId = providerId
-                        sessionProvider = null
+                        sessionProvider = provider as? TranslationSessionProvider
                         sessionStarted = false
                     } else {
-                        Log.i("RealtimeSubtitleTranslator", "CLOUD_PROVIDER_SUCCESS provider=$providerId lines=${lines.size}")
+                        Log.i(TAG, "CLOUD_PROVIDER_SUCCESS provider=$providerId lines=${lines.size}")
                     }
-                    providerSucceeded = true
                     return results
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     lastError = error
                     failures += "$providerId: ${error.message ?: error.javaClass.simpleName}"
                     val message = error.message.orEmpty()
-                    val quotaExhausted = Regex("quota|billing|insufficient|daily limit|free usage|사용량을.*(초과|소진)|한도", RegexOption.IGNORE_CASE).containsMatchIn(message)
-                    val httpCode = Regex("HTTP\\s+(\\d{3})").find(message)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    val transient = error is java.io.IOException || httpCode != null && (httpCode >= 500 || httpCode == 429 && !quotaExhausted)
-                    Log.w("RealtimeSubtitleTranslator", "CLOUD_PROVIDER_FAILED provider=$providerId attempt=${attempt + 1} transient=$transient message=$message", error)
+                    val quotaExhausted = Regex(
+                        "quota|billing|insufficient|daily limit|free usage|사용량을.*(초과|소진)|한도",
+                        RegexOption.IGNORE_CASE,
+                    ).containsMatchIn(message)
+                    val httpCode = Regex("HTTP\\s+(\\d{3})")
+                        .find(message)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                    val transient = error is java.io.IOException ||
+                        (httpCode != null && (httpCode >= 500 || httpCode == 429 && !quotaExhausted))
+                    Log.w(
+                        TAG,
+                        "CLOUD_PROVIDER_FAILED provider=$providerId attempt=${attempt + 1} transient=$transient message=$message",
+                        error,
+                    )
                     if (!transient || attempt == 2) break
                     delay((1500L shl attempt).coerceAtMost(6000L))
                 }
             }
-            if (!providerSucceeded) {
-                Log.w("RealtimeSubtitleTranslator", "CLOUD_PROVIDER_EXHAUSTED provider=$providerId")
-            }
+            Log.w(TAG, "CLOUD_PROVIDER_EXHAUSTED provider=$providerId")
         }
 
         val summary = failures.distinct().joinToString(" | ").take(2500)
         throw IllegalStateException(
-            if (summary.isBlank()) "사용 가능한 클라우드 번역 API 키가 없습니다. AI 설정에서 API 키를 저장하세요."
-            else "설정된 클라우드 번역 API가 모두 실패했습니다. $summary",
-            lastError
+            if (summary.isBlank()) {
+                "사용 가능한 클라우드 번역 API 키가 없습니다. AI 설정에서 API 키를 저장하세요."
+            } else {
+                "설정된 클라우드 번역 API가 모두 실패했습니다. $summary"
+            },
+            lastError,
         )
     }
 
-    private fun cueCacheKey(cue: Cue): String =
-        if (cue.index >= 0) "cue:${cue.kind}:${cue.index}" else "runtime:${normalize(modelText(cue.text, cue.kind))}"
-
-    private fun findCurrentCue(snapshot: List<Cue>, text: String, positionMs: Long): Cue? {
-        if (snapshot.isEmpty()) return null
-        val kind = snapshot.firstOrNull()?.kind ?: return null
-        val key = normalize(modelText(text, kind))
-        if (key.isBlank()) return null
-        val matching = snapshot.filter { normalize(modelText(it.text, it.kind)) == key }
-        return matching
-            .filter { positionMs >= it.startMs && positionMs <= it.endMs }
-            .minByOrNull { kotlin.math.abs(positionMs - it.startMs) }
-            ?: matching.minByOrNull { kotlin.math.abs(positionMs - it.startMs) }
-    }
+    private fun cueCacheKey(cue: Cue): String = "cue:${cue.kind}:${cue.index}"
 
     /**
-     * Returns translations that have completed since the previous call. Each
-     * event is added directly to libass by the player overlay.
+     * Returns all currently completed events. This is intentionally non-destructive.
+     * LibassTranslationOverlay performs event deduplication. Therefore an event
+     * cannot be lost merely because AndroidView/libass was not ready during one
+     * polling iteration.
      */
     suspend fun consumeReadyTranslatedEvents(): List<ReadyEvent> = lock.withLock {
         if (cues.isEmpty() || cache.isEmpty()) return@withLock emptyList()
@@ -341,15 +533,9 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         for (cue in cues.sortedWith(compareBy<Cue> { it.startMs }.thenBy { it.index })) {
             val key = cueCacheKey(cue)
             val translated = cache[key] ?: continue
-            if (key in emittedTranslationKeys) continue
             val text = restoreTags(cue.text, translated, cue.kind)
             val eventData = buildAssEventData(content, cue, text)
-            Log.i(
-                "RealtimeSubtitleTranslator",
-                "READY_EVENT cue=${cue.index} start=${cue.startMs} end=${cue.endMs} ass=${eventData.take(180)}"
-            )
             result += ReadyEvent(key, cue.startMs, cue.endMs, eventData)
-            emittedTranslationKeys += key
         }
         result
     }
@@ -363,68 +549,61 @@ class RealtimeSubtitleTranslator(private val context: Context) {
                 "Default",
                 "",
                 "0", "0", "0", "",
-                translated.replace("\n", "\\N")
+                translated.replace("\n", "\\N"),
             ).joinToString(",")
         }
-        val dialogueLines = content.replace("\r\n", "\n").replace('\r', '\n')
-            .lineSequence().filter { it.trimStart().startsWith("Dialogue:", true) }.toList()
+
+        val dialogueLines = content
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .lineSequence()
+            .filter { it.trimStart().startsWith("Dialogue:", true) }
+            .toList()
         val line = dialogueLines.getOrNull(cue.index)
-            ?: return listOf(
-                "0", assTime(cue.startMs), assTime(cue.endMs), "Default", "",
-                "0", "0", "0", "", translated.replace("\n", "\\N")
-            ).joinToString(",")
-        val body = line.substringAfter(':', "").trimStart().split(',', limit = 10)
-        if (body.size < 10) {
+        val body = line
+            ?.substringAfter(':', "")
+            ?.trimStart()
+            ?.split(',', limit = 10)
+
+        if (body == null || body.size < 10) {
             return listOf(
                 "0", assTime(cue.startMs), assTime(cue.endMs), "Default", "",
-                "0", "0", "0", "", translated.replace("\n", "\\N")
+                "0", "0", "0", "", translated.replace("\n", "\\N"),
             ).joinToString(",")
         }
-        // ASS Events Format is: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text.
-        // Keep the original event metadata and replace only Text.
+
         return listOf(
             body[0], body[1], body[2], body[3], body[4],
             body[5], body[6], body[7], body[8],
-            translated.replace("\n", "\\N")
+            translated.replace("\n", "\\N"),
         ).joinToString(",")
     }
 
-    private fun normalize(text: String): String = text
-        .replace("\r", "")
-        .trim()
+    private fun modelText(text: String, kind: String): String =
+        SubtitleMarkup.plainText(text).replace("\n", "\\N")
 
-    private fun modelText(text: String, kind: String): String {
-        val normalized = text
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
-        val lineBreaksNormalized = if (kind == "srt" || kind == "vtt" || kind == "sbv") {
-            normalized.replace("\n", "\\N")
-        } else {
-            normalized
-        }
-        return lineBreaksNormalized
-            .replace(Regex("(?s)\\{[^}]*\\}"), "")
-            .replace(Regex("(?is)<[^>]+>"), "")
-            .trim()
-    }
-
+    private fun sanitizeTranslatedText(value: String): String = SubtitleMarkup.plainText(value)
 
     private fun restoreTags(original: String, translated: String, kind: String): String {
-        val normalized = translated.replace("\r\n", "\n").replace('\r', '\n')
-        val tagRegex = if (kind == "ass") Regex("\\{[^}]*\\}") else Regex("(?is)<[^>]+>")
+        val normalized = sanitizeTranslatedText(translated)
+        val isAss = kind == "ass" || kind == "ssa"
+        if (!isAss) {
+            return normalized.replace("\\N", "\n").replace("\n", "\\N")
+        }
+
+        val tagRegex = Regex("\\{[^}]*\\}")
         val matches = tagRegex.findAll(original).toList()
-        if (matches.isEmpty()) return if (kind == "ass") normalized.replace("\n", "\\N") else normalized
-        // ASS override tags belong at the same logical positions as the original
-        // cue. Do not let a model-generated label or echoed context become part of
-        // the subtitle payload.
+        val translatedText = normalized.replace("\\N", "\n").replace("\n", "\\N")
+        if (matches.isEmpty()) return translatedText
+
         val visibleLength = original.replace(tagRegex, "").length.coerceAtLeast(1)
-        val translatedText = if (kind == "ass") normalized.replace("\n", "\\N") else normalized
         val insertions = matches.map { match ->
             val before = original.substring(0, match.range.first).replace(tagRegex, "")
             val ratio = before.length.toDouble() / visibleLength.toDouble()
             val position = (translatedText.length * ratio).toInt().coerceIn(0, translatedText.length)
             position to match.value
         }.sortedWith(compareBy<Pair<Int, String>> { it.first })
+
         val out = StringBuilder()
         var cursor = 0
         insertions.groupBy { it.first }.toSortedMap().forEach { (position, tags) ->
@@ -439,17 +618,21 @@ class RealtimeSubtitleTranslator(private val context: Context) {
 
     private fun parse(text: String, ext: String): List<Cue> {
         val normalized = text.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
-        val detected = ext.lowercase().ifBlank {
-            when {
-                normalized.startsWith("WEBVTT", true) -> "vtt"
-                Regex("(?im)^\\s*Dialogue:").containsMatchIn(normalized) -> "ass"
-                Regex("(?is)<SYNC\\s+Start\\s*=").containsMatchIn(normalized) -> "smi"
-                Regex("(?is)<tt[ >]|<ttml").containsMatchIn(normalized) -> "ttml"
-                Regex("(?m)^\\s*\\[\\d+\\]\\s*\\[\\d+\\]").containsMatchIn(normalized) -> "sub"
-                Regex("(?m)^\\s*\\d{1,2}:\\d{2}:\\d{2}[,.]\\d{3}\\s*[-=]+>").containsMatchIn(normalized) -> "srt"
-                else -> ""
-            }
+
+        // Strong content signatures win over a cached/downloaded file extension.
+        // This fixes old files saved as .vtt even though their body is SRT/ASS.
+        val sniffed = when {
+            normalized.trimStart().startsWith("WEBVTT", true) -> "vtt"
+            Regex("(?im)^\\s*Dialogue:").containsMatchIn(normalized) -> "ass"
+            Regex("(?is)<SYNC\\s+Start\\s*=").containsMatchIn(normalized) -> "smi"
+            Regex("(?is)<tt[ >]|<ttml").containsMatchIn(normalized) -> "ttml"
+            Regex("(?m)^\\s*\\[\\d+\\]\\s*\\[\\d+\\]").containsMatchIn(normalized) -> "sub"
+            Regex("(?m)^\\s*(?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3}\\s*-->\\s*(?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3}").containsMatchIn(normalized) -> "srt"
+            else -> ""
         }
+        val detected = sniffed.ifBlank { ext.lowercase() }
+
+        Log.d(TAG, "PARSE_FORMAT path=$sourcePath ext=$ext detected=$detected")
         return when (detected) {
             "ass", "ssa" -> parseAss(normalized)
             "srt" -> parseTimedText(normalized, "srt")
@@ -468,12 +651,20 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         var i = 0
         var index = 0
         val timing = Regex("^\\s*([^\\s]+)\\s*-->\\s*([^\\s]+)(?:\\s+.*)?$")
+
         while (i < lines.size) {
-            val m = timing.find(lines[i])
-            if (m == null) { i++; continue }
-            val start = parseTime(m.groupValues[1])
-            val end = parseTime(m.groupValues[2])
-            if (start < 0 || end < 0 || end <= start) { i++; continue }
+            val match = timing.find(lines[i])
+            if (match == null) {
+                i++
+                continue
+            }
+            val start = parseTime(match.groupValues[1])
+            val end = parseTime(match.groupValues[2])
+            if (start < 0L || end <= start) {
+                i++
+                continue
+            }
+
             val body = buildList {
                 var j = i + 1
                 while (j < lines.size && !timing.matches(lines[j])) {
@@ -483,6 +674,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
                     j++
                 }
             }.joinToString("\\N").trim()
+
             if (body.isNotBlank()) result += Cue(start, end, body, kind, index++)
             i++
             while (i < lines.size && !timing.matches(lines[i]) && lines[i].isNotBlank()) i++
@@ -491,70 +683,103 @@ class RealtimeSubtitleTranslator(private val context: Context) {
     }
 
     private fun parseAss(text: String): List<Cue> {
-        val all = mutableListOf<Cue>()
-        val japanese = Regex("[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff々ー]")
+        val result = mutableListOf<Cue>()
+        val visibleLetter = Regex("\\p{L}")
         var ordinal = 0
+
         text.lines().forEach { line ->
-            if (!line.startsWith("Dialogue:", true)) return@forEach
+            if (!line.trimStart().startsWith("Dialogue:", true)) return@forEach
             val parts = line.substringAfter(':').trimStart().split(',', limit = 10)
-            if (parts.size < 10) { ordinal++; return@forEach }
-            val start = parseAssTime(parts[1]); val end = parseAssTime(parts[2])
+            if (parts.size < 10) {
+                ordinal++
+                return@forEach
+            }
+            val start = parseAssTime(parts[1])
+            val end = parseAssTime(parts[2])
             val body = parts[9].trim()
-            if (start >= 0 && end > start && body.isNotBlank() && japanese.containsMatchIn(stripSubtitleMarkup(body))) {
-                all += Cue(start, end, body, "ass", ordinal)
+            val visible = stripSubtitleMarkup(body)
+            if (start >= 0L && end > start && visibleLetter.containsMatchIn(visible)) {
+                result += Cue(start, end, body, "ass", ordinal)
             }
             ordinal++
         }
-        return all
+        return result
     }
 
     private fun parseSmi(text: String): List<Cue> {
-        val matches = Regex("(?is)<SYNC\\s+Start\\s*=\\s*(\\d+)\\s*>(.*?)(?=<SYNC\\s+Start|</BODY>|</SAMI>)").findAll(text).toList()
-        return matches.mapIndexedNotNull { i, m ->
-            val start = m.groupValues[1].toLongOrNull() ?: return@mapIndexedNotNull null
-            val next = matches.getOrNull(i + 1)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: start + 4000L
-            val body = m.groupValues[2].replace(Regex("(?is)<br\\s*/?>"), "\\N").replace(Regex("(?is)<[^>]+>"), "").trim()
-            if (body.isBlank() || next <= start) null else Cue(start, next, body, "smi", i)
+        val matches = Regex(
+            "(?is)<SYNC\\s+Start\\s*=\\s*(\\d+)\\s*>(.*?)(?=<SYNC\\s+Start|</BODY>|</SAMI>)",
+        ).findAll(text).toList()
+        return matches.mapIndexedNotNull { index, match ->
+            val start = match.groupValues[1].toLongOrNull() ?: return@mapIndexedNotNull null
+            val next = matches.getOrNull(index + 1)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toLongOrNull()
+                ?: start + 4000L
+            val body = match.groupValues[2]
+                .replace(Regex("(?is)<br\\s*/?>"), "\\N")
+                .replace(Regex("(?is)<[^>]+>"), "")
+                .replace("&nbsp;", " ", true)
+                .trim()
+            if (body.isBlank() || next <= start) null else Cue(start, next, body, "smi", index)
         }
     }
 
     private fun parseSbv(text: String): List<Cue> {
-        val blocks = text.split(Regex("\\n\\s*\\n+"))
-        return blocks.mapIndexedNotNull { i, block ->
-            val lines = block.lines(); val first = lines.firstOrNull()?.trim() ?: return@mapIndexedNotNull null
-            val p = first.split(',', limit = 2); if (p.size != 2) return@mapIndexedNotNull null
-            val start = parseTime(p[0]); val end = parseTime(p[1]); val body = lines.drop(1).joinToString("\\N").trim()
-            if (start >= 0 && end > start && body.isNotBlank()) Cue(start, end, body, "sbv", i) else null
+        val blocks = text.split(Regex("\n\\s*\n+"))
+        return blocks.mapIndexedNotNull { index, block ->
+            val lines = block.lines()
+            val first = lines.firstOrNull()?.trim() ?: return@mapIndexedNotNull null
+            val pair = first.split(',', limit = 2)
+            if (pair.size != 2) return@mapIndexedNotNull null
+            val start = parseTime(pair[0])
+            val end = parseTime(pair[1])
+            val body = lines.drop(1).joinToString("\\N").trim()
+            if (start >= 0L && end > start && body.isNotBlank()) {
+                Cue(start, end, body, "sbv", index)
+            } else null
         }
     }
 
-    private fun parseSubLike(text: String, kind: String): List<Cue> = text.lineSequence().mapIndexedNotNull { i, line ->
-        val m = Regex("^\\s*\\[(\\d+)\\]\\s*\\[(\\d+)\\]\\s*(.*)$").find(line) ?: return@mapIndexedNotNull null
-        val start = m.groupValues[1].toLongOrNull()?.times(100L) ?: return@mapIndexedNotNull null
-        val end = m.groupValues[2].toLongOrNull()?.times(100L) ?: return@mapIndexedNotNull null
-        val body = m.groupValues[3].replace("|", "\\N").trim()
-        if (end <= start || body.isBlank()) null else Cue(start, end, body, kind, i)
-    }.toList()
+    private fun parseSubLike(text: String, kind: String): List<Cue> =
+        text.lineSequence().mapIndexedNotNull { index, line ->
+            val match = Regex("^\\s*\\[(\\d+)\\]\\s*\\[(\\d+)\\]\\s*(.*)$")
+                .find(line)
+                ?: return@mapIndexedNotNull null
+            val start = match.groupValues[1].toLongOrNull()?.times(100L)
+                ?: return@mapIndexedNotNull null
+            val end = match.groupValues[2].toLongOrNull()?.times(100L)
+                ?: return@mapIndexedNotNull null
+            val body = match.groupValues[3].replace("|", "\\N").trim()
+            if (end <= start || body.isBlank()) null else Cue(start, end, body, kind, index)
+        }.toList()
 
     private fun parseTtml(text: String): List<Cue> {
         val regex = Regex("(?is)<p\\b([^>]*)>(.*?)</p>")
-        return regex.findAll(text).mapIndexedNotNull { i, m ->
-            val attrs = m.groupValues[1]; val body = stripSubtitleMarkup(m.groupValues[2]).trim()
-            val begin = Regex("(?i)\\bbegin\\s*=\\s*[\\\"']([^\\\"']+)").find(attrs)?.groupValues?.get(1)
-            val end = Regex("(?i)\\bend\\s*=\\s*[\\\"']([^\\\"']+)").find(attrs)?.groupValues?.get(1)
-            val dur = Regex("(?i)\\bdur\\s*=\\s*[\\\"']([^\\\"']+)").find(attrs)?.groupValues?.get(1)
+        return regex.findAll(text).mapIndexedNotNull { index, match ->
+            val attrs = match.groupValues[1]
+            val body = stripSubtitleMarkup(match.groupValues[2]).trim()
+            val begin = Regex("(?i)\\bbegin\\s*=\\s*[\"']([^\"']+)")
+                .find(attrs)?.groupValues?.get(1)
+            val end = Regex("(?i)\\bend\\s*=\\s*[\"']([^\"']+)")
+                .find(attrs)?.groupValues?.get(1)
+            val dur = Regex("(?i)\\bdur\\s*=\\s*[\"']([^\"']+)")
+                .find(attrs)?.groupValues?.get(1)
             val start = parseTtmlTime(begin) ?: return@mapIndexedNotNull null
-            val finish = parseTtmlTime(end) ?: dur?.let { start + (parseTtmlTime(it) ?: return@mapIndexedNotNull null) } ?: return@mapIndexedNotNull null
-            if (finish <= start || body.isBlank()) null else Cue(start, finish, body, "ttml", i)
+            val finish = parseTtmlTime(end)
+                ?: dur?.let { start + (parseTtmlTime(it) ?: return@mapIndexedNotNull null) }
+                ?: return@mapIndexedNotNull null
+            if (finish <= start || body.isBlank()) null else Cue(start, finish, body, "ttml", index)
         }.toList()
     }
 
     private fun parseTtmlTime(value: String?): Long? {
-        val v = value?.trim() ?: return null
+        val normalized = value?.trim() ?: return null
         return when {
-            v.matches(Regex("\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?")) -> parseTime(v)
-            v.endsWith("ms", true) -> v.dropLast(2).toDoubleOrNull()?.toLong()
-            v.endsWith("s", true) -> v.dropLast(1).toDoubleOrNull()?.times(1000L)?.toLong()
+            normalized.matches(Regex("\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?")) -> parseTime(normalized)
+            normalized.endsWith("ms", true) -> normalized.dropLast(2).toDoubleOrNull()?.toLong()
+            normalized.endsWith("s", true) -> normalized.dropLast(1).toDoubleOrNull()?.times(1000L)?.toLong()
             else -> null
         }
     }
@@ -565,33 +790,76 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         .replace("\\N", "\n")
         .trim()
 
+    private fun readSubtitleText(file: File): String? {
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        if (bytes.isEmpty()) return null
+
+        val candidates = mutableListOf<Charset>()
+        when {
+            bytes.size >= 3 &&
+                bytes[0] == 0xEF.toByte() &&
+                bytes[1] == 0xBB.toByte() &&
+                bytes[2] == 0xBF.toByte() -> candidates += Charsets.UTF_8
+            bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> candidates += Charsets.UTF_16LE
+            bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> candidates += Charsets.UTF_16BE
+            else -> candidates += listOf(
+                Charsets.UTF_8,
+                Charset.forName("Shift_JIS"),
+                Charset.forName("EUC-KR"),
+                Charsets.UTF_16LE,
+                Charsets.UTF_16BE,
+            )
+        }
+
+        return candidates.distinct().mapNotNull { charset ->
+            runCatching { String(bytes, charset).removePrefix("\uFEFF") }.getOrNull()
+        }.maxByOrNull { decoded ->
+            val replacement = decoded.count { it == '\uFFFD' }
+            val controls = decoded.count { it.code in 0..8 || it.code in 14..31 }
+            decoded.length - replacement * 20 - controls * 20
+        }
+    }
+
     private fun parseTime(value: String): Long {
-        val v = value.trim().substringBefore(' ')
-        val p = v.split(':')
+        val normalized = value.trim().substringBefore(' ')
+        val parts = normalized.split(':')
         return runCatching {
-            when (p.size) {
-                3 -> ((p[0].toLong() * 3600 + p[1].toLong() * 60) * 1000) + (p[2].replace(',', '.').toDouble() * 1000).toLong()
-                2 -> (p[0].toLong() * 60_000) + (p[1].replace(',', '.').toDouble() * 1000).toLong()
+            when (parts.size) {
+                3 -> ((parts[0].toLong() * 3600 + parts[1].toLong() * 60) * 1000) +
+                    (parts[2].replace(',', '.').toDouble() * 1000).toLong()
+                2 -> (parts[0].toLong() * 60_000) +
+                    (parts[1].replace(',', '.').toDouble() * 1000).toLong()
                 else -> -1L
             }
         }.getOrDefault(-1L)
     }
 
     private fun assTime(ms: Long): String {
-        val totalCentiseconds = (ms.coerceAtLeast(0L) / 10L)
+        val totalCentiseconds = ms.coerceAtLeast(0L) / 10L
         val hours = totalCentiseconds / 360000L
         val minutes = (totalCentiseconds / 6000L) % 60L
         val seconds = (totalCentiseconds / 100L) % 60L
         val centiseconds = totalCentiseconds % 100L
-        return "%d:%02d:%02d.%02d".format(java.util.Locale.US, hours, minutes, seconds, centiseconds)
+        return "%d:%02d:%02d.%02d".format(
+            java.util.Locale.US,
+            hours,
+            minutes,
+            seconds,
+            centiseconds,
+        )
     }
 
     private fun parseAssTime(value: String): Long {
-        val p = value.trim().split(':')
+        val parts = value.trim().split(':')
         return runCatching {
-            if (p.size != 3) return@runCatching -1L
-            val seconds = p[2].replace(',', '.').toDouble()
-            ((p[0].toLong() * 3600 + p[1].toLong() * 60) * 1000 + (seconds * 1000).toLong())
+            if (parts.size != 3) return@runCatching -1L
+            val seconds = parts[2].replace(',', '.').toDouble()
+            ((parts[0].toLong() * 3600 + parts[1].toLong() * 60) * 1000 +
+                (seconds * 1000).toLong())
         }.getOrDefault(-1L)
+    }
+
+    companion object {
+        private const val TAG = "RealtimeSubtitleTranslator"
     }
 }

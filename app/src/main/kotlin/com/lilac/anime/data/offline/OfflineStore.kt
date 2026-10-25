@@ -303,6 +303,7 @@ object OfflineStore {
                 put("episodeNumber", item.episodeNumber)
                 put("episodeKey", item.episodeKey)
                 put("progress", item.progress.toDouble())
+                put("updated", item.updated)
             }
             array.put(json)
         }
@@ -322,7 +323,8 @@ object OfflineStore {
                         animeId = json.getString("animeId"),
                         episodeNumber = json.getInt("episodeNumber"),
                         progress = json.getDouble("progress").toFloat(),
-                        episodeKey = json.optString("episodeKey", json.getInt("episodeNumber").toString())
+                        episodeKey = json.optString("episodeKey", json.getInt("episodeNumber").toString()),
+                        updated = json.optLong("updated", 0L)
                     )
                 )
             }

@@ -1077,13 +1077,11 @@ class AnimeViewModel : ViewModel() {
         library = syncedLibrary
         watchHistory = syncedHistory
         watchHistoryLoaded = true
-        viewModelScope.launch(Dispatchers.IO) {
-            OfflineStore.saveLibrary(context, syncedLibrary)
-            OfflineStore.saveWatchHistory(context, syncedHistory)
-        }
+        // DeviceSyncClient persists the exact merged state before its cursor.
     }
 
     fun toggleLibrary(context: Context, animeId: String) {
+        if (animeId !in library) DeviceSyncClient.libraryAdded(context, animeId)
         library = if (animeId in library) library - animeId else library + animeId
         val updated = library
         viewModelScope.launch(Dispatchers.IO) {
@@ -1097,7 +1095,7 @@ class AnimeViewModel : ViewModel() {
 
     fun updateProgress(context: Context, animeId: String, episodeNumber: Int, progress: Float, episodeKey: String = episodeNumber.toString()) {
         val filtered = watchHistory.filterNot { it.animeId == animeId && it.episodeKey.equals(episodeKey, ignoreCase = true) }
-        val updatedItem = WatchProgress(animeId = animeId, episodeNumber = episodeNumber, progress = progress, episodeKey = episodeKey)
+        val updatedItem = WatchProgress(animeId = animeId, episodeNumber = episodeNumber, progress = progress, episodeKey = episodeKey, updated = System.currentTimeMillis())
         val newList = listOf(updatedItem) + filtered
         watchHistory = newList
         viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveWatchHistory(context, newList) }

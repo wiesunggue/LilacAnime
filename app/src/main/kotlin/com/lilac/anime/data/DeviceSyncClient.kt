@@ -4,7 +4,13 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.lilac.anime.Anime
 import com.lilac.anime.WatchProgress
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import com.lilac.anime.data.offline.OfflineStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,14 +32,25 @@ object DeviceSyncClient {
     private const val KEY_REV = "revision"
     private const val KEY_SNAPSHOT = "snapshot"
     private const val MAX_BATCH = 500
+    private const val KEY_DATA = "wire_data_v2"
+    private const val KEY_SCHEMA = "wire_schema"
+    private const val KEY_ADDED = "library_added_at"
+    private val syncMutex = Mutex()
 
     data class SyncResult(val library: Set<String>, val history: List<WatchProgress>, val sent: Int, val received: Int, val revision: Long)
 
     fun savedServer(context: Context): String = prefs(context).getString(KEY_URL, "") ?: ""
     fun isConnected(context: Context): Boolean = decryptToken(context).isNotBlank()
 
+    fun libraryAdded(context: Context, id: String) {
+        val p = prefs(context)
+        val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
+        added.put(id, System.currentTimeMillis())
+        p.edit().putString(KEY_ADDED, added.toString()).apply()
+    }
+
     fun disconnect(context: Context) {
-        prefs(context).edit().remove(KEY_TOKEN).remove(KEY_REV).remove(KEY_SNAPSHOT).apply()
+        prefs(context).edit().remove(KEY_TOKEN).remove(KEY_REV).remove(KEY_SNAPSHOT).remove(KEY_DATA).remove(KEY_SCHEMA).apply()
     }
 
     fun connect(context: Context, rawUrl: String, password: String): String {
@@ -44,133 +61,128 @@ object DeviceSyncClient {
         if (password.length < 8) throw IllegalArgumentException("서버 비밀번호는 8자 이상이어야 합니다.")
         val login = request("POST", "$base/api/login", JSONObject().put("password", password), null)
         val token = login.optString("token").takeIf { it.isNotBlank() } ?: throw IllegalStateException(login.optString("error", "로그인 토큰을 받지 못했습니다."))
-        prefs(context).edit().putString(KEY_URL, base).putString(KEY_TOKEN, encryptToken(context, token)).apply()
+        val editor = prefs(context).edit().putString(KEY_URL, base).putString(KEY_TOKEN, encryptToken(context, token))
+            .remove(KEY_REV).remove(KEY_SNAPSHOT)
+        if (savedServer(context) != base) editor.remove(KEY_DATA)
+        editor.putInt(KEY_SCHEMA, 2).apply()
         return "서버 연결 완료"
     }
 
-    suspend fun sync(context: Context, library: Set<String>, history: List<WatchProgress>): SyncResult = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    suspend fun sync(
+        context: Context,
+        library: Set<String>,
+        history: List<WatchProgress>,
+        metadata: Map<String, Anime> = emptyMap(),
+        readFresh: () -> Pair<Set<String>, List<WatchProgress>> = { library to history },
+        apply: suspend (Set<String>, List<WatchProgress>) -> Unit = { _, _ -> },
+    ): SyncResult = syncMutex.withLock { withContext(Dispatchers.IO) {
         val base = savedServer(context)
         val token = decryptToken(context)
         require(base.isNotBlank() && token.isNotBlank()) { "먼저 동기화 서버에 연결하세요." }
         val p = prefs(context)
-        val oldSnapshot = try { JSONObject(p.getString(KEY_SNAPSHOT, "{}") ?: "{}") } catch (_: Exception) { JSONObject() }
+        val migrated = p.getInt(KEY_SCHEMA, 0) == 2
+        val previous = runCatching { JSONObject(p.getString(KEY_DATA, "{}") ?: "{}") }.getOrElse { JSONObject() }
+        val before = if (migrated) runCatching { JSONObject(p.getString(KEY_SNAPSHOT, "{}") ?: "{}") }.getOrElse { JSONObject() } else JSONObject()
+        val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
+        val addedAt = added.keys().asSequence().associateWith { added.optLong(it, 1L) }
+        val local = DeviceSyncMapping.local(library, history, metadata, previous, addedAt)
+        val outgoing = mutableListOf<JSONObject>()
         val now = System.currentTimeMillis()
-        val local = localCollections(library, history, now)
-        val snapshotNow = hashes(local)
-        val outgoing = JSONArray()
-        for (collection in listOf("library", "history")) {
-            val before = oldSnapshot.optJSONObject(collection) ?: JSONObject()
-            val current = local.optJSONObject(collection) ?: JSONObject()
-            val keys = current.keys()
-            while (keys.hasNext()) {
-                val id = keys.next()
-                val data = current.optJSONObject(id) ?: continue
-                val hash = hashJson(data)
-                if (before.optString(id, "") == hash) continue
-                val updated = if (collection == "history") data.optLong("updated", now).coerceAtLeast(1L) else if (before.has(id)) now else data.optLong("savedAt", now).coerceAtLeast(1L)
-                outgoing.put(JSONObject().put("collection", collection).put("id", id).put("updated", updated).put("data", data))
-            }
-            val oldKeys = before.keys()
-            while (oldKeys.hasNext()) {
-                val id = oldKeys.next()
-                if (!current.has(id)) outgoing.put(JSONObject().put("collection", collection).put("id", id).put("updated", now).put("deleted", true))
-            }
-        }
-        val incoming = mutableListOf<JSONObject>()
-        var sent = 0
-        var start = 0
-        while (start < outgoing.length()) {
-            val batch = JSONArray()
-            for (i in start until minOf(start + MAX_BATCH, outgoing.length())) batch.put(outgoing.getJSONObject(i))
-            val response = request("POST", "$base/api/sync", JSONObject().put("items", batch), token)
-            sent += response.optInt("accepted", 0)
-            val current = response.optJSONArray("current") ?: JSONArray()
-            for (i in 0 until current.length()) incoming += current.getJSONObject(i)
-            start += MAX_BATCH
-        }
-        var rev = p.getLong(KEY_REV, 0L)
-        var more = true
-        var received = 0
-        while (more) {
-            val page = request("GET", "$base/api/sync?since=$rev", null, token)
-            val items = page.optJSONArray("items") ?: JSONArray()
-            for (i in 0 until items.length()) { incoming += items.getJSONObject(i); received++ }
-            val next = page.optLong("rev", rev)
-            if (next < rev) throw IllegalStateException("서버 리비전이 역행했습니다.")
-            rev = next
-            more = page.optBoolean("more", false)
-            if (more && items.length() == 0) throw IllegalStateException("서버가 다음 페이지를 제공하지 않았습니다.")
-        }
-        val merged = merge(local, incoming)
-        val newLibrary = merged.optJSONObject("library")?.let { obj -> buildSet { val it = obj.keys(); while (it.hasNext()) add(it.next()) } } ?: library
-        val newHistory = merged.optJSONObject("history")?.let { obj ->
-            val result = mutableListOf<WatchProgress>(); val it = obj.keys()
-            while (it.hasNext()) {
-                val id = it.next(); val d = obj.optJSONObject(id) ?: continue
-                val animeId = d.optString("androidAnimeId").ifBlank { d.optJSONObject("anime")?.optString("id").orEmpty().ifBlank { d.optJSONObject("anime")?.optString("mal_id").orEmpty() } }
-                val epKey = d.optString("androidEpisodeKey").ifBlank { d.optJSONObject("episode")?.optString("key").orEmpty().ifBlank { d.optJSONObject("episode")?.optString("number").orEmpty().ifBlank { id.substringAfterLast(':', "1") } } }
-                val epNumber = d.optInt("episodeNumber", d.optJSONObject("episode")?.optInt("number", epKey.takeWhile { it.isDigit() }.toIntOrNull() ?: 1) ?: 1)
-                if (animeId.isNotBlank()) result += WatchProgress(animeId, epNumber.coerceAtLeast(1), d.optDouble("progress", 0.0).toFloat().coerceIn(0f, 100f), epKey)
-            }
-            result.distinctBy { "${it.animeId}|${it.episodeKey}" }.sortedByDescending { merged.optJSONObject("history")?.optJSONObject(historyId(it))?.optLong("updated", 0L) ?: 0L }.take(300)
-        } ?: history
-        OfflineStore.saveLibrary(context, newLibrary)
-        OfflineStore.saveWatchHistory(context, newHistory)
-        p.edit().putLong(KEY_REV, rev).putString(KEY_SNAPSHOT, hashes(localCollections(newLibrary, newHistory, now)).toString()).apply()
-        SyncResult(newLibrary, newHistory, sent, received, rev)
-    }
-
-    private fun localCollections(library: Set<String>, history: List<WatchProgress>, now: Long): JSONObject {
-        val lib = JSONObject(); library.forEach { id -> lib.put(id, JSONObject().put("provider", "android").put("id", id).put("mal_id", id).put("title", id).put("savedAt", now)) }
-        val hist = JSONObject(); history.forEach { w ->
-            val key = historyId(w)
-            hist.put(key, JSONObject().put("key", key).put("androidAnimeId", w.animeId).put("androidEpisodeKey", w.episodeKey).put("name", "${w.animeId} · ${w.episodeKey}화").put("episodeNumber", w.episodeNumber).put("episode", JSONObject().put("number", w.episodeNumber).put("key", w.episodeKey)).put("anime", JSONObject().put("id", w.animeId).put("mal_id", w.animeId).put("title", w.animeId)).put("progress", w.progress.toDouble()).put("updated", now))
-        }
-        return JSONObject().put("library", lib).put("history", hist)
-    }
-
-    private fun hashes(local: JSONObject): JSONObject {
-        val out = JSONObject()
-        for (c in listOf("library", "history")) { val values = JSONObject(); val obj = local.optJSONObject(c) ?: JSONObject(); val keys = obj.keys(); while (keys.hasNext()) { val id = keys.next(); values.put(id, hashJson(obj.optJSONObject(id) ?: JSONObject()) ) }; out.put(c, values) }
-        return out
-    }
-
-    private fun merge(local: JSONObject, incoming: List<JSONObject>): JSONObject {
-        val out = JSONObject()
-        for (collection in listOf("library", "history")) {
-            val values = JSONObject(local.optJSONObject(collection)?.toString() ?: "{}")
-            incoming.filter { it.optString("collection") == collection }.sortedBy { it.optLong("updated", 0L) }.forEach { item ->
-                val id = item.optString("id"); if (id.isBlank()) return@forEach
-                if (item.optBoolean("deleted")) values.remove(id) else {
-                    val data = item.optJSONObject("data") ?: return@forEach
-                    if (collection == "library") { val mapped = data.optString("mal_id").ifBlank { data.optString("id") }; if (mapped.isNotBlank() && mapped != id) values.put(mapped, data) else values.put(id, data) }
-                    else values.put(id, data)
+        for (c in DeviceSyncMapping.collections) {
+            val current = local.getJSONObject(c)
+            val old = before.optJSONObject(c) ?: JSONObject()
+            current.keys().forEach { id ->
+                val data = current.getJSONObject(id)
+                if (old.optString(id) != DeviceSyncMapping.hash(data)) {
+                    val time = if (c == "history") data.optLong("updated", 1L) else if (old.has(id)) now else data.optLong("savedAt", 1L)
+                    outgoing += JSONObject().put("collection", c).put("id", id).put("updated", time.coerceAtLeast(1L)).put("data", data)
                 }
             }
-            out.put(collection, values)
+            old.keys().forEach { id ->
+                if (!current.has(id)) outgoing += JSONObject().put("collection", c).put("id", id).put("updated", now).put("deleted", true)
+            }
         }
-        return out
-    }
+        // Enforce server limits before the first request, with a byte budget as
+        // well as an item count (500 detailed anime can exceed Vercel's body limit).
+        require(outgoing.all { it.toString().toByteArray(Charsets.UTF_8).size <= 64 * 1024 }) { "동기화 항목 하나가 서버의 64KB 제한을 넘었습니다." }
+        val incoming = mutableListOf<JSONObject>()
+        var sent = 0
+        var batch = JSONArray(); var bytes = 0
+        fun sendBatch() {
+            if (batch.length() == 0) return
+            val response = request("POST", "$base/api/sync", JSONObject().put("items", batch), token)
+            sent += response.getInt("accepted")
+            val current = response.getJSONArray("current")
+            for (i in 0 until current.length()) incoming += current.getJSONObject(i)
+            batch = JSONArray(); bytes = 0
+        }
+        outgoing.forEach { item ->
+            val size = item.toString().toByteArray(Charsets.UTF_8).size
+            if (batch.length() >= MAX_BATCH || bytes + size > 3 * 1024 * 1024) sendBatch()
+            batch.put(item); bytes += size
+        }
+        sendBatch()
+        var rev = if (migrated) p.getLong(KEY_REV, 0L) else 0L
+        var more = true; var received = 0
+        while (more) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val page = request("GET", "$base/api/sync?since=$rev", null, token)
+            val items = page.getJSONArray("items")
+            val next = page.getLong("rev")
+            more = page.getBoolean("more")
+            require(next >= rev && (!more || next > rev)) { "서버가 올바른 다음 리비전을 제공하지 않았습니다. 다시 연결하세요." }
+            require(!more || items.length() > 0) { "서버의 다음 페이지가 비어 있습니다." }
+            for (i in 0 until items.length()) { incoming += items.getJSONObject(i); received++ }
+            rev = next
+        }
+        require(savedServer(context) == base && decryptToken(context) == token) { "동기화 중 서버 연결이 변경되었습니다. 다시 시도하세요." }
+        val remote = DeviceSyncMapping.merge(local, incoming)
+        val remoteLibrary = DeviceSyncMapping.library(remote)
+        val remoteHistory = DeviceSyncMapping.history(remote)
+        // The snapshot describes the acknowledged state, not edits made during
+        // the network request. Those edits stay pending for the next sync.
+        val acknowledged = DeviceSyncMapping.local(remoteLibrary, remoteHistory, metadata, remote, addedAt)
+        val finalState = withContext(Dispatchers.Main) {
+            val (freshLibrary, freshHistory) = readFresh()
+            val finalLibrary = (remoteLibrary + (freshLibrary - library)) - (library - freshLibrary)
+            val initial = history.associateBy { "${it.animeId}|${it.episodeKey}" }
+            val fresh = freshHistory.associateBy { "${it.animeId}|${it.episodeKey}" }
+            val combined = remoteHistory.associateBy { "${it.animeId}|${it.episodeKey}" }.toMutableMap()
+            (initial.keys + fresh.keys).forEach { key ->
+                if (initial[key] != fresh[key]) {
+                    val changed = fresh[key]
+                    if (changed == null) combined.remove(key) else combined[key] = changed
+                }
+            }
+            val finalHistory = combined.values.sortedByDescending { it.updated }.take(300)
+            apply(finalLibrary, finalHistory)
+            finalLibrary to finalHistory
+        }
+        OfflineStore.saveLibrary(context, finalState.first)
+        OfflineStore.saveWatchHistory(context, finalState.second)
+        p.edit().putInt(KEY_SCHEMA, 2).putLong(KEY_REV, rev)
+            .putString(KEY_DATA, remote.toString()).putString(KEY_SNAPSHOT, DeviceSyncMapping.hashes(acknowledged).toString()).apply()
+        SyncResult(finalState.first, finalState.second, sent, received, rev)
+    } }
 
-    private fun historyId(w: WatchProgress) = "${w.animeId}:${w.episodeKey}"
-    private fun hashJson(value: JSONObject): String {
-        // These are server timestamps, not user-visible content changes. Excluding them prevents endless re-upload loops.
-        val stable = JSONObject(value.toString()).apply { remove("updated"); remove("savedAt") }
-        return MessageDigest.getInstance("SHA-256").digest(stable.toString().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    private fun normalizeUrl(raw: String): String {
+        val uri = runCatching { java.net.URI(raw.trim()) }.getOrElse { throw IllegalArgumentException("올바른 서버 주소를 입력하세요.") }
+        require(uri.scheme?.lowercase() in setOf("https", "http") && !uri.host.isNullOrBlank()) { "서버 주소는 http:// 또는 https://로 시작해야 합니다." }
+        require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null && (uri.path.isNullOrEmpty() || uri.path == "/")) { "서버의 기본 주소만 입력하세요. (예: https://이름.vercel.app)" }
+        if (uri.scheme.equals("http", true)) require(uri.host.lowercase() in setOf("localhost", "127.0.0.1", "[::1]")) { "외부 서버는 HTTPS 주소를 사용하세요." }
+        return java.net.URI(uri.scheme.lowercase(), null, uri.host.lowercase(), uri.port, null, null, null).toString()
     }
-    private fun normalizeUrl(raw: String): String { val value = raw.trim().trimEnd('/'); require(value.startsWith("https://", true) || value.startsWith("http://", true)) { "서버 주소는 http:// 또는 https://로 시작해야 합니다." }
-        require(!value.contains('@')) { "주소에 사용자 정보는 넣을 수 없습니다." }
-        if (value.startsWith("http://", true)) require(value.substringAfter("http://").substringBefore('/').substringBefore(':').equals("localhost", true) || value.substringAfter("http://").substringBefore('/').substringBefore(':') == "127.0.0.1") { "비밀번호와 토큰 보호를 위해 외부 서버는 HTTPS 주소를 사용하세요." }
-        return value }
 
     private fun request(method: String, url: String, body: JSONObject?, token: String?): JSONObject {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply { requestMethod = method; connectTimeout = 12000; readTimeout = 20000; setRequestProperty("Accept", "application/json"); if (token != null) setRequestProperty("Authorization", "Bearer $token"); if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json; charset=utf-8") } }
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply { requestMethod = method; instanceFollowRedirects = false; connectTimeout = 12000; readTimeout = 20000; setRequestProperty("Accept", "application/json"); if (token != null) setRequestProperty("Authorization", "Bearer $token"); if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json; charset=utf-8") } }
         try {
             if (body != null) conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            val json = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+            val json = try { JSONObject(text) } catch (_: Exception) {
+                throw IllegalStateException(if (code in 300..399 || text.contains("Vercel", true)) "Vercel 보호 페이지입니다. Domains의 고정 주소와 Deployment Protection 설정을 확인하세요." else "서버가 JSON 응답을 반환하지 않았습니다. (HTTP $code)")
+            }
             if (code !in 200..299) throw IllegalStateException(json.optString("error").ifBlank { "서버 요청 실패 (HTTP $code)" })
             return json
         } finally { conn.disconnect() }

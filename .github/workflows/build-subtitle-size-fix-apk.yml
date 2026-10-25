@@ -1,6 +1,9 @@
-name: Build subtitle runtime v2 APK
+name: Build desktop sync and subtitle markup APK
 
 on:
+  push:
+    branches:
+      - fix/device-sync-desktop-parity
   pull_request:
     branches:
       - main
@@ -35,13 +38,6 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.0.0'
-
-      - name: Verify direct subtitle runtime fixes are present
-        shell: bash
-        run: |
-          grep -q 'persistedSubtitleScale' app/src/main/kotlin/com/lilac/anime/player/LibassTranslationOverlay.kt
-          grep -q 'currentEngineOrNull' app/src/main/kotlin/com/lilac/anime/player/MpvPlaybackManager.kt
-          grep -q 'non-destructive' app/src/main/kotlin/com/lilac/anime/data/subtitle/translation/RealtimeSubtitleTranslator.kt
 
       - name: Generate Gradle build files from current module configuration
         shell: bash
@@ -94,8 +90,8 @@ jobs:
                   applicationId = "com.lilac.anime"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 32
-                  versionName = "0.4.1-alpha-3-subtitle-runtime-v2"
+                  versionCode = 34
+                  versionName = "0.4.1-alpha-5-desktop-sync-markup"
 
                   ndk {
                       abiFilters += "arm64-v8a"
@@ -158,6 +154,8 @@ jobs:
               implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
               implementation("androidx.mediarouter:mediarouter:1.8.1")
               implementation("com.google.mlkit:translate:17.0.3")
+              testImplementation("junit:junit:4.13.2")
+              testImplementation("org.json:json:20240303")
               implementation(kotlin("stdlib"))
               implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
               implementation("androidx.media3:media3-exoplayer:1.8.0")
@@ -172,21 +170,40 @@ jobs:
         shell: bash
         run: test -s app/src/main/jniLibs/arm64-v8a/liblilac_whisper.so
 
+      - name: Run JVM regression tests
+        shell: bash
+        run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
+
+      - name: Upload regression test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-sync-markup-test-reports
+          path: app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build debug APK
         shell: bash
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK signature and package metadata
+        shell: bash
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | head -8
 
       - name: Collect APK
         shell: bash
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-subtitle-runtime-v2-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-desktop-sync-markup-debug.apk
           ls -lh artifacts/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LilacAnime-subtitle-runtime-v2-debug
-          path: artifacts/LilacAnime-subtitle-runtime-v2-debug.apk
+          name: LilacAnime-desktop-sync-markup-debug
+          path: artifacts/LilacAnime-desktop-sync-markup-debug.apk
           if-no-files-found: error
           retention-days: 7
