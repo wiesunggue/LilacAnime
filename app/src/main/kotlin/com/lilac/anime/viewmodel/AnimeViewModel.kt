@@ -307,7 +307,7 @@ class AnimeViewModel : ViewModel() {
     val downloadStatuses: StateFlow<List<MpvOfflineStore.Status>> = _downloadStatuses
 
     fun setAppForeground(foreground: Boolean) { syncController.setForeground(foreground) }
-    fun setAutomaticDeviceSync(enabled: Boolean) {
+    fun updateAutomaticDeviceSync(enabled: Boolean) {
         automaticDeviceSync = enabled
         DeviceSyncClient.setAutomaticSyncEnabled(appContext, enabled)
         if (enabled) syncController.refresh()
@@ -981,23 +981,18 @@ class AnimeViewModel : ViewModel() {
         if (candidates.isEmpty()) candidates = withContext(Dispatchers.IO) { OfflineStore.getEpisodesForAnime(context, animeId) }
         val latest = getLatestProgress(animeId)
         val key = requestedKey ?: latest?.episodeKey
-        val label = key?.let {
-            if ("_ep_" in it || ":ep-" in it || Regex("\\d+[a-zA-Z]*").matches(it)) PlaybackHistory.episodeLabel(it, latest?.episodeNumber ?: 0)
-            else if (requestedKey == null && latest != null) PlaybackHistory.episodeLabel(it, latest.episodeNumber) else null
-        }
-        fun find(list: List<Episode>): Episode? = list.firstOrNull { it.id == key }
-            ?: list.firstOrNull { label != null && it.displayNumber.equals(label, true) }
-        if (!_isOffline.value && (candidates.isEmpty() || (key != null && find(candidates) == null))) {
+        if (!_isOffline.value && (candidates.isEmpty() || PlaybackHistory.selectEpisode(candidates, latest, requestedKey) == null)) {
             val detail = withContext(Dispatchers.IO) { repository.getAnimeDetail(anime, source) }
-            val loaded = withContext(Dispatchers.IO) { repository.getEpisodes(detail, source) }
+            val loaded = withContext(Dispatchers.IO) {
+                if (key?.contains("_dub_ep_") == true) repository.getDubEpisodes(detail, source) else repository.getEpisodes(detail, source)
+            }
             anime = detail; candidates = loaded
         }
         check(candidates.isNotEmpty()) { if (_isOffline.value) "저장된 회차가 없습니다. 인터넷 연결 후 다시 시도하세요." else "재생할 회차를 찾지 못했습니다." }
-        val ordered = candidates.sortedWith(compareBy<Episode> { it.number }.thenBy { it.displayNumber })
-        var episode = find(ordered) ?: if (key == null) ordered.first() else throw IllegalStateException("해당 회차를 찾지 못했습니다. 작품의 회차 목록을 새로고침하세요.")
-        if (requestedKey == null && latest != null && PlaybackHistory.fraction(latest.progress) >= .95f) {
-            episode = ordered.getOrNull(ordered.indexOf(episode) + 1) ?: episode
-        }
+        val ordered = PlaybackHistory.orderedEpisodes(candidates, key)
+        val episode = PlaybackHistory.selectEpisode(ordered, latest, requestedKey)
+            ?: throw IllegalStateException("해당 회차를 찾지 못했습니다. 작품의 회차 목록을 새로고침하세요.")
+        anime = anime.copy(episodes = ordered)
         animeCache[animeId] = anime; detailCache[animeId] = anime; episodeCache[animeId] = ordered
         anime to episode
     }
@@ -1107,7 +1102,7 @@ class AnimeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    repository.getDubEpisodes(anime, playerSettings.videoSourcePreference)
+                    repository.getDubEpisodes(anime, PlaybackHistory.sourceFor(anime, playerSettings.videoSourcePreference))
                 }
                 dubEpisodeCache[anime.id] = result
             } catch (_: Exception) {

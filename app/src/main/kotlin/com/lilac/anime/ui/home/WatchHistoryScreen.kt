@@ -167,7 +167,7 @@ fun WatchHistoryScreen(
                                 }
                                 Spacer(Modifier.height(6.dp))
                                 Text(anime.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
-                                Text("EP.${progress.episodeKey}", color = Lilac, fontSize = 11.sp, maxLines = 1)
+                                Text("EP.${PlaybackHistory.episodeLabel(progress.episodeKey, progress.episodeNumber)}", color = Lilac, fontSize = 11.sp, maxLines = 1)
                             }
                         }
                     }

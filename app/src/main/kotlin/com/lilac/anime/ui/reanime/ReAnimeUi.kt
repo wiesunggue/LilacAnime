@@ -60,6 +60,10 @@ fun ReAnimeHomeScreen(
                     onSearch = { onNavigate("search") }
                 )
             }
+            if (vm.watchHistory.isNotEmpty()) {
+                item { HomeSectionHeader("이어보기", "마지막 시청 위치부터 재생", Icons.Default.History) }
+                item { com.lilac.anime.ui.home.ContinueWatchingRail(vm, open, resume = { onNavigate("resume/${android.net.Uri.encode(it.id)}") }) }
+            }
             if (vm.reAnimeTop.isNotEmpty()) {
                 item { HomeSectionHeader("오늘의 인기", "지금 Re:ANIME에서 많이 보는 작품", Icons.Default.Whatshot) }
                 item {

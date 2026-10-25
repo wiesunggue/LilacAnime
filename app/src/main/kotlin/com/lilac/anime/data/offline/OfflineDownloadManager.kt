@@ -84,7 +84,7 @@ object OfflineDownloadManager {
     fun resume(context: Context, animeId: String, episodeId: String) = command(context, LilacDownloadService.ACTION_RESUME, animeId, episodeId)
     fun resumeAll(context: Context, failuresOnly: Boolean = false) {
         MpvOfflineStore.listStatuses(context).filter {
-            DownloadQueuePolicy.canResume(it.state, it.sourceUrl) && (!failuresOnly || it.state == "failed")
+            DownloadQueuePolicy.canResume(it.state, it.sourceUrl) && it.state == (if (failuresOnly) "failed" else "paused")
         }.forEach { resume(context, it.animeId, it.episodeId) }
     }
     private fun command(context: Context, action: String, animeId: String, episodeId: String) {

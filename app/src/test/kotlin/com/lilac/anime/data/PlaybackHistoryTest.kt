@@ -1,6 +1,7 @@
 package com.lilac.anime.data
 
 import com.lilac.anime.Anime
+import com.lilac.anime.Episode
 import com.lilac.anime.WatchProgress
 import org.junit.Assert.*
 import org.junit.Test
@@ -31,6 +32,20 @@ class PlaybackHistoryTest {
         val b = WatchProgress("12", 4, .8f, "12_ep_4")
         assertSame(a, PlaybackHistory.find(listOf(a, b), "12", "4a", 4))
         assertSame(b, PlaybackHistory.find(listOf(a, b), "12", "4", 4))
+    }
+    @Test fun resumeAdvancesCompletedEpisodeButExplicitReplayDoesNot() {
+        val episodes = (1..3).map { Episode("12_ep_$it", it, "${it}화") }
+        val finished = WatchProgress("12", 2, .97f, "12_ep_2")
+        assertEquals("12_ep_3", PlaybackHistory.selectEpisode(episodes, finished, null)?.id)
+        assertEquals("12_ep_2", PlaybackHistory.selectEpisode(episodes, finished, "12_ep_2")?.id)
+        assertEquals("12_ep_3", PlaybackHistory.selectEpisode(episodes, finished.copy(episodeKey="12_ep_3", episodeNumber=3), null)?.id)
+        assertNull(PlaybackHistory.selectEpisode(episodes, finished, "missing-uuid"))
+    }
+    @Test fun automaticNextStaysInTheSameDubVersion() {
+        val episodes = listOf(Episode("x_ep_1", 1, "1"), Episode("x_dub_ep_1", 1, "1"), Episode("x_dub_ep_2", 2, "2"))
+        val latest = WatchProgress("x", 1, 1f, "x_dub_ep_1")
+        assertEquals("x_dub_ep_2", PlaybackHistory.selectEpisode(episodes, latest, null)?.id)
+        assertEquals(listOf("x_dub_ep_1", "x_dub_ep_2"), PlaybackHistory.orderedEpisodes(episodes, latest.episodeKey).map { it.id })
     }
     @Test fun openingSyncedAnimeUsesItsSourceInsteadOfCurrentHomeSource() {
         assertEquals("reanime", PlaybackHistory.sourceFor(Anime(id="reanime:x"), "linkkf"))

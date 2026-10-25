@@ -764,6 +764,10 @@ fun PlayerScreen(
         // The generation token prevents a slow resolver from the previous episode
         // from overwriting the newly selected episode's stream URL.
         if (target.id == currentEpisode.id || loading && target.id == currentEpisode.id) return
+        if (engine.duration > 0L && engine.currentPosition > 0L) {
+            vm.updateProgress(context, anime.id, currentEpisode.number,
+                (engine.currentPosition.toDouble() / engine.duration).toFloat().coerceIn(0f, 1f), currentEpisode.id)
+        }
         playbackGeneration += 1
         Log.i("MpvEpisode", "EPISODE_SWITCH_BEGIN from=${currentEpisode.displayNumber} to=${target.displayNumber} generation=$playbackGeneration")
         // Never reuse the previous foreground libmpv session for a new episode.
@@ -1205,9 +1209,7 @@ fun PlayerScreen(
                 delay(100)
             }
             val saved = vm.getProgress(anime.id, currentEpisode.id, currentEpisode.number)
-            val resume = saved?.progress
-                ?.takeUnless { it >= 0.95f }
-                ?.let { (engine.duration * it).toLong() } ?: 0L
+            val resume = com.lilac.anime.data.PlaybackHistory.resumePosition(engine.duration, saved?.progress ?: 0f)
             if (resume > 0L && engine.duration > 0L) {
                 engine.seekTo(resume.coerceAtMost(engine.duration - 250L))
             }
@@ -1365,9 +1367,7 @@ fun PlayerScreen(
             delay(100)
         }
         val saved = vm.getProgress(anime.id, currentEpisode.id, currentEpisode.number)
-        val resume = saved?.progress
-            ?.takeUnless { it >= 0.95f }
-            ?.let { (engine.duration * it).toLong() } ?: 0L
+        val resume = com.lilac.anime.data.PlaybackHistory.resumePosition(engine.duration, saved?.progress ?: 0f)
         if (resume > 0L && engine.duration > 0L) {
             engine.seekTo(resume.coerceAtMost((engine.duration - 250L).coerceAtLeast(0L)))
         }
@@ -1611,9 +1611,7 @@ fun PlayerScreen(
         repeat(80) {
             if (!isActive || generation != playbackGeneration) return@LaunchedEffect
             if (engine.duration > 0L) {
-                val resume = saved?.progress
-                    ?.takeUnless { it >= 0.95f }
-                    ?.let { (engine.duration * it).toLong() } ?: 0L
+                val resume = com.lilac.anime.data.PlaybackHistory.resumePosition(engine.duration, saved?.progress ?: 0f)
                 if (resume > 0L) {
                     engine.seekTo(resume.coerceAtMost((engine.duration - 250L).coerceAtLeast(0L)))
                 }

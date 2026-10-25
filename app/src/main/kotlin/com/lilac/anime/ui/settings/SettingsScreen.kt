@@ -126,7 +126,7 @@ private fun DeviceSyncSettings(vm: AnimeViewModel) {
                 Text("자동 동기화", fontWeight = FontWeight.Medium)
                 Text("앱 시작·복귀, 목록 변경, 사용 중 5분마다 동기화합니다.", fontSize = 11.sp)
             }
-            Switch(checked = vm.automaticDeviceSync, onCheckedChange = vm::setAutomaticDeviceSync)
+            Switch(checked = vm.automaticDeviceSync, onCheckedChange = vm::updateAutomaticDeviceSync)
         }
         Text(vm.deviceSyncMessage, fontSize = 12.sp)
         if (busy || vm.deviceSyncBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
