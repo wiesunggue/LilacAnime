@@ -764,7 +764,7 @@ fun PlayerScreen(
         // The generation token prevents a slow resolver from the previous episode
         // from overwriting the newly selected episode's stream URL.
         if (target.id == currentEpisode.id || loading && target.id == currentEpisode.id) return
-        if (engine.duration > 0L && engine.currentPosition > 0L) {
+        if (!loading && engine.duration > 0L && engine.currentPosition > 0L && engine.loadedLoadGeneration > 0L) {
             vm.updateProgress(context, anime.id, currentEpisode.number,
                 (engine.currentPosition.toDouble() / engine.duration).toFloat().coerceIn(0f, 1f), currentEpisode.id)
         }
@@ -799,7 +799,7 @@ fun PlayerScreen(
     }
 
     fun leave() {
-        if (engine.duration > 0) vm.updateProgress(
+        if (!loading && engine.duration > 0 && engine.loadedLoadGeneration > 0L) vm.updateProgress(
             context,
             anime.id,
             currentEpisode.number,
