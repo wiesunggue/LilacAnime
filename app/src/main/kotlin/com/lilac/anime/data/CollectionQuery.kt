@@ -9,6 +9,11 @@ internal object CollectionQuery {
     val sources = linkedMapOf("all" to "모든 소스", "reanime" to "RE:Anime", "miruro" to "Miruro", "animenosub" to "Animenosub", "ohli24" to "애니24", "linkkf" to "링크애니")
     val sorts = linkedMapOf("saved" to "저장순", "title" to "제목순", "recent" to "최근 시청순", "year" to "연도순")
     val states = linkedMapOf("all" to "전체", "new" to "시청 전", "watching" to "시청 중", "finished" to "최근 회차 완주")
+    /** Source switching may discard catalogs, but must retain cross-source saved/history metadata. */
+    fun retainCollections(library: Set<String>, history: List<WatchProgress>, vararg catalogs: Collection<Anime>): Map<String, Anime> {
+        val ids = library + history.map { it.animeId }
+        return catalogs.flatMap { it }.filter { it.id in ids }.associateBy { it.id }
+    }
     fun matches(anime: Anime, query: String): Boolean {
         val haystack = listOf(anime.title, anime.native, anime.romaji, anime.english, anime.synonyms, anime.genres.joinToString(" ")).joinToString(" ").lowercase(Locale.ROOT)
         return query.trim().lowercase(Locale.ROOT).split(Regex("\\s+")).all { it in haystack }

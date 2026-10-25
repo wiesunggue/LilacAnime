@@ -12,6 +12,14 @@ class CollectionQueryTest {
     private val c = Anime(id="123", title="다라마", synonyms="Beta", year="2020")
     private val titles = listOf(c, b, a)
     private val history = listOf(WatchProgress(a.id, 1, .2f, updated=10), WatchProgress(a.id, 2, 1f, updated=20), WatchProgress(b.id, 1, .4f, updated=30))
+    @Test fun changingSourceRetainsSavedAndHistoryTitlesButDropsUnrelatedCatalog() {
+        val updated = a.copy(title="상세 갱신 제목")
+        val retained = CollectionQuery.retainCollections(setOf(a.id), listOf(WatchProgress(b.id, 1, .4f)), titles, listOf(updated))
+        assertEquals(setOf(a.id, b.id), retained.keys)
+        assertEquals(updated, retained[a.id])
+        assertFalse(retained.containsKey(c.id))
+        assertEquals(listOf(c,b,a), titles)
+    }
     @Test fun searchMatchesAlternateTitlesAndAllTerms() {
         assertTrue(CollectionQuery.matches(a,"ALPHA 모험"))
         assertFalse(CollectionQuery.matches(a,"Alpha 없는장르"))

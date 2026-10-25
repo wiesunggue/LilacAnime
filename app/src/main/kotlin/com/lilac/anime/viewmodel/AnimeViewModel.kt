@@ -562,10 +562,13 @@ class AnimeViewModel : ViewModel() {
             OfflineStore.savePlayerSettings(context, newSettings)
             if (sourceChanged && !_isOffline.value) {
                 withContext(Dispatchers.Main) {
+                    val retained = com.lilac.anime.data.CollectionQuery.retainCollections(
+                        library, watchHistory, animeCache.values, homeAnime, allAnime, detailCache.values)
                     homeAnime = emptyList()
                     allAnime = emptyList()
                     detailCache.clear()
                     animeCache.clear()
+                    animeCache.putAll(retained)
                     episodeCache.clear()
                     dubEpisodeCache.clear()
                     episodeLoading.clear()
