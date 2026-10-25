@@ -69,7 +69,7 @@ fun WatchHistoryScreen(
 
     val historyItems = vm.watchHistory
         .distinctBy { it.animeId }
-        .mapNotNull { progress -> resolvedAnime[progress.animeId]?.let { it to progress } }
+        .mapNotNull { progress -> (vm.getAnime(context, progress.animeId) ?: resolvedAnime[progress.animeId])?.let { it to progress } }
 
     fun toggleSelection(id: String) {
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id

@@ -38,6 +38,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -52,10 +54,12 @@ class LilacDownloadService : Service() {
     private val scope = CoroutineScope(serviceJob + Dispatchers.IO)
     private val jobs = mutableMapOf<String, Job>()
     private val cancelledForRemoval = mutableSetOf<String>()
+    private val pausedByUser = mutableSetOf<String>()
     private val lock = Any()
     private val slots = Semaphore(MAX_CONCURRENT_DOWNLOADS)
     private var foregroundStarted = false
     private var recoveryStarted = false
+    private var pendingCommands = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -72,6 +76,8 @@ class LilacDownloadService : Service() {
         when (intent?.action) {
             ACTION_DOWNLOAD -> enqueue(intent)
             ACTION_REMOVE -> removeDownload(intent)
+            ACTION_PAUSE -> pauseDownload(intent)
+            ACTION_RESUME -> resumeDownload(intent)
             ACTION_CANCEL_ALL -> cancelAll()
         }
         return START_STICKY
@@ -90,7 +96,7 @@ class LilacDownloadService : Service() {
 
     private fun recoverPersistentJobs() {
         MpvOfflineStore.listStatuses(applicationContext)
-            .filter { it.state == STATE_DOWNLOADING || it.state == STATE_QUEUED || it.state == STATE_PAUSED }
+            .filter { DownloadQueuePolicy.shouldRecover(it.state) }
             .forEach { status ->
                 val source = status.sourceUrl ?: return@forEach
                 val intent = Intent(this, LilacDownloadService::class.java).apply {
@@ -104,14 +110,32 @@ class LilacDownloadService : Service() {
                     putExtra(EXTRA_VIDEO_SOURCE, status.videoSource)
                     putExtra(EXTRA_EPISODE_NUMBER, status.episodeNumber)
                     putExtra(EXTRA_EPISODE_KEY, status.episodeKey)
+                    putExtra(EXTRA_SUBTITLE_URL, status.subtitleUrl)
+                    putExtra(EXTRA_SUBTITLE_REFERER, status.subtitleReferer)
                     action = ACTION_DOWNLOAD
                 }
                 enqueue(intent, recovering = true)
             }
     }
 
+    private fun launchCommand(action: suspend () -> Unit) {
+        synchronized(lock) { pendingCommands++ }
+        scope.launch {
+            try { action() }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) { android.util.Log.e("OfflineDownload", "QUEUE_COMMAND_FAILED", error) }
+            finally {
+                synchronized(lock) { pendingCommands-- }
+                publishSummary(); maybeStopService()
+            }
+        }
+    }
+
     private fun enqueue(intent: Intent, recovering: Boolean = false) {
-        scope.launch { enqueueInternal(intent, recovering) }
+        if (!recovering) synchronized(lock) {
+            pausedByUser.remove("${intent.getStringExtra(EXTRA_ANIME_ID)}::${intent.getStringExtra(EXTRA_EPISODE_ID)}")
+        }
+        launchCommand { enqueueInternal(intent, recovering) }
     }
 
     private suspend fun enqueueInternal(intent: Intent, recovering: Boolean = false) {
@@ -133,19 +157,6 @@ class LilacDownloadService : Service() {
         val episodeNumber = intent.getIntExtra(EXTRA_EPISODE_NUMBER, 0)
         val episodeKey = intent.getStringExtra(EXTRA_EPISODE_KEY) ?: episodeNumber.toString()
         val key = "$animeId::$episodeId"
-
-        // Resolve Linkkf's AniList ID before creating the download coroutine.
-        // enqueueInternal is already suspend, so this value is available to
-        // runDownload and cannot fall out of scope at the call site.
-        val storedAnime = OfflineStore.getAnime(applicationContext, animeId)
-        val resolvedAnilistId = storedAnime?.anilistId
-            ?: try {
-                com.lilac.anime.data.LinkkfApiClient().getAnime(animeId)?.anilistId
-            } catch (t: Throwable) {
-                android.util.Log.w("AniSkip", "LINKKF_ANILIST_LOOKUP_FAILED anime=$animeId", t)
-                null
-            }
-        val resolvedMalId = storedAnime?.malId
 
         synchronized(lock) {
             if (jobs[key]?.isActive == true) return
@@ -193,13 +204,28 @@ class LilacDownloadService : Service() {
                 streamHeaders = streamHeaders ?: old?.streamHeaders,
                 episodeNumber = if (episodeNumber != 0) episodeNumber else old?.episodeNumber ?: 0,
                 episodeKey = episodeKey.ifBlank { old?.episodeKey.orEmpty() },
-                videoSource = videoSource
+                videoSource = videoSource,
+                subtitleUrl = requestedSubtitleUrl ?: old?.subtitleUrl,
+                subtitleReferer = requestedSubtitleReferer ?: old?.subtitleReferer
             )
         )
 
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 slots.withPermit {
+                    // Resolve optional metadata inside the registered job, so
+                    // pause/restart can see and cancel it immediately.
+                    val storedAnime = OfflineStore.getAnime(applicationContext, animeId)
+                    val resolvedAnilistId = storedAnime?.anilistId
+                        ?: if (videoSource == "linkkf") try {
+                            com.lilac.anime.data.LinkkfApiClient().getAnime(animeId)?.anilistId
+                        } catch (cancel: CancellationException) { throw cancel }
+                        catch (error: Exception) {
+                            android.util.Log.w("AniSkip", "LINKKF_ANILIST_LOOKUP_FAILED anime=$animeId", error)
+                            null
+                        } else null
+                    val resolvedMalId = storedAnime?.malId
+
                     runDownload(
                         animeId = animeId,
                         episodeId = episodeId,
@@ -214,8 +240,8 @@ class LilacDownloadService : Service() {
                         videoSource = videoSource,
                         anilistId = resolvedAnilistId,
                         malId = resolvedMalId,
-                        subtitleUrl = requestedSubtitleUrl,
-                        subtitleReferer = requestedSubtitleReferer
+                        subtitleUrl = requestedSubtitleUrl ?: old?.subtitleUrl,
+                        subtitleReferer = requestedSubtitleReferer ?: old?.subtitleReferer
                     )
                 }
             } catch (cancel: CancellationException) {
@@ -225,11 +251,12 @@ class LilacDownloadService : Service() {
                     MpvOfflineStore.saveStatus(
                         applicationContext,
                         (current ?: MpvOfflineStore.Status(key, existingProgress, STATE_PAUSED, title, episodeId))
-                            .copy(state = STATE_PAUSED)
+                            .copy(state = if (synchronized(lock) { key in pausedByUser }) STATE_PAUSED else STATE_QUEUED)
                     )
                 }
                 throw cancel
             } catch (t: Throwable) {
+                if (synchronized(lock) { key in pausedByUser || key in cancelledForRemoval }) return@launch
                 val current = MpvOfflineStore.findStatus(applicationContext, key)
                 MpvOfflineStore.saveStatus(
                     applicationContext,
@@ -237,16 +264,27 @@ class LilacDownloadService : Service() {
                         .copy(state = STATE_FAILED, error = t.message)
                 )
             } finally {
+                val finished = currentCoroutineContext()[Job]
                 synchronized(lock) {
-                    jobs.remove(key)
+                    if (jobs[key] === finished) jobs.remove(key)
                     cancelledForRemoval.remove(key)
                 }
                 publishSummary()
                 maybeStopService()
             }
         }
-        synchronized(lock) { jobs[key] = job }
-        job.start()
+        synchronized(lock) {
+            if (jobs[key]?.isActive == true) { job.cancel(); return }
+            if (key in pausedByUser || key in cancelledForRemoval) {
+                job.cancel()
+                if (key in pausedByUser) MpvOfflineStore.findStatus(applicationContext, key)?.let {
+                    MpvOfflineStore.saveStatus(applicationContext, it.copy(state = STATE_PAUSED))
+                }
+                return
+            }
+            jobs[key] = job
+            job.start()
+        }
         publishSummary()
     }
 
@@ -477,28 +515,30 @@ class LilacDownloadService : Service() {
         // callback can still return once during cancellation; never let that
         // late callback resurrect the job as DOWNLOADING.
         synchronized(lock) {
-            if (cancelledForRemoval.contains(key)) return
-        }
-        val old = MpvOfflineStore.findStatus(applicationContext, key)
-        MpvOfflineStore.saveStatus(
-            applicationContext,
-            MpvOfflineStore.Status(
-                id = key,
-                progress = progress,
-                state = STATE_DOWNLOADING,
-                title = title,
-                episodeId = episodeId,
-                videoPath = old?.videoPath,
-                animeId = key.substringBefore("::"),
-                sourceUrl = sourceUrl,
-                referer = referer,
-                flixCloudPk = old?.flixCloudPk,
-                streamHeaders = old?.streamHeaders,
-                episodeNumber = episodeNumber,
-                episodeKey = episodeKey,
-                videoSource = old?.videoSource ?: "linkkf"
+            if (key in cancelledForRemoval || key in pausedByUser) return
+            val old = MpvOfflineStore.findStatus(applicationContext, key)
+            MpvOfflineStore.saveStatus(
+                applicationContext,
+                MpvOfflineStore.Status(
+                    id = key,
+                    progress = progress,
+                    state = STATE_DOWNLOADING,
+                    title = title,
+                    episodeId = episodeId,
+                    videoPath = old?.videoPath,
+                    animeId = key.substringBefore("::"),
+                    sourceUrl = sourceUrl,
+                    referer = referer,
+                    flixCloudPk = old?.flixCloudPk,
+                    streamHeaders = old?.streamHeaders,
+                    episodeNumber = episodeNumber,
+                    episodeKey = episodeKey,
+                    videoSource = old?.videoSource ?: "linkkf",
+                    subtitleUrl = old?.subtitleUrl,
+                    subtitleReferer = old?.subtitleReferer
+                )
             )
-        )
+        }
         publishSummary()
     }
 
@@ -519,29 +559,67 @@ class LilacDownloadService : Service() {
     ) {
         // Do not write a terminal/paused state after an explicit removal.
         synchronized(lock) {
-            if (cancelledForRemoval.contains(key)) return
+            if (key in cancelledForRemoval || key in pausedByUser) return
+            val old = MpvOfflineStore.findStatus(applicationContext, key)
+            MpvOfflineStore.saveStatus(
+                applicationContext,
+                (old ?: MpvOfflineStore.Status(key, 0f, state, title.orEmpty(), episodeId.orEmpty()))
+                    .copy(
+                        state = state,
+                        progress = progress ?: old?.progress ?: 0f,
+                        videoPath = videoPath ?: old?.videoPath,
+                        title = title ?: old?.title.orEmpty(),
+                        episodeId = episodeId ?: old?.episodeId.orEmpty(),
+                        sourceUrl = sourceUrl ?: old?.sourceUrl,
+                        referer = referer ?: old?.referer,
+                        episodeNumber = episodeNumber ?: old?.episodeNumber ?: 0,
+                        episodeKey = episodeKey ?: old?.episodeKey.orEmpty(),
+                        flixCloudPk = flixCloudPk ?: old?.flixCloudPk,
+                        streamHeaders = streamHeaders ?: old?.streamHeaders,
+                        videoSource = videoSource ?: old?.videoSource ?: "linkkf",
+                        error = null
+                    )
+            )
         }
-        val old = MpvOfflineStore.findStatus(applicationContext, key)
-        MpvOfflineStore.saveStatus(
-            applicationContext,
-            (old ?: MpvOfflineStore.Status(key, 0f, state, title.orEmpty(), episodeId.orEmpty()))
-                .copy(
-                    state = state,
-                    progress = progress ?: old?.progress ?: 0f,
-                    videoPath = videoPath ?: old?.videoPath,
-                    title = title ?: old?.title.orEmpty(),
-                    episodeId = episodeId ?: old?.episodeId.orEmpty(),
-                    sourceUrl = sourceUrl ?: old?.sourceUrl,
-                    referer = referer ?: old?.referer,
-                    episodeNumber = episodeNumber ?: old?.episodeNumber ?: 0,
-                    episodeKey = episodeKey ?: old?.episodeKey.orEmpty(),
-                    flixCloudPk = flixCloudPk ?: old?.flixCloudPk,
-                    streamHeaders = streamHeaders ?: old?.streamHeaders,
-                    videoSource = videoSource ?: old?.videoSource ?: "linkkf",
-                    error = null
-                )
-        )
         publishSummary()
+    }
+
+    private fun pauseDownload(intent: Intent) {
+        val animeId = intent.getStringExtra(EXTRA_ANIME_ID) ?: return
+        val episodeId = intent.getStringExtra(EXTRA_EPISODE_ID) ?: return
+        val key = "$animeId::$episodeId"
+        launchCommand {
+        val job = synchronized(lock) {
+            val old = MpvOfflineStore.findStatus(applicationContext, key) ?: return@launchCommand
+            if (!DownloadQueuePolicy.canPause(old.state)) return@launchCommand
+            pausedByUser += key
+            MpvOfflineStore.saveStatus(applicationContext, old.copy(state = STATE_PAUSED, error = null))
+            jobs[key]?.also { it.cancel() }
+        }
+            job?.join()
+        }
+    }
+
+    private fun resumeDownload(intent: Intent) {
+        val animeId = intent.getStringExtra(EXTRA_ANIME_ID) ?: return
+        val episodeId = intent.getStringExtra(EXTRA_EPISODE_ID) ?: return
+        val key = "$animeId::$episodeId"
+        launchCommand {
+            val oldJob = synchronized(lock) { jobs[key] }
+            if (synchronized(lock) { key in pausedByUser }) oldJob?.cancelAndJoin()
+            val status = MpvOfflineStore.findStatus(applicationContext, key) ?: return@launchCommand
+            if (!DownloadQueuePolicy.canResume(status.state, status.sourceUrl)) { maybeStopService(); return@launchCommand }
+            synchronized(lock) { pausedByUser.remove(key); cancelledForRemoval.remove(key) }
+            val request = Intent(this@LilacDownloadService, LilacDownloadService::class.java).apply {
+                putExtra(EXTRA_ANIME_ID, status.animeId); putExtra(EXTRA_EPISODE_ID, status.episodeId)
+                putExtra(EXTRA_TITLE, status.title); putExtra(EXTRA_URL, status.sourceUrl)
+                putExtra(EXTRA_REFERER, status.referer); putExtra(EXTRA_FLIX_PK, status.flixCloudPk)
+                putExtra(EXTRA_STREAM_HEADERS, status.streamHeaders); putExtra(EXTRA_VIDEO_SOURCE, status.videoSource)
+                putExtra(EXTRA_EPISODE_NUMBER, status.episodeNumber); putExtra(EXTRA_EPISODE_KEY, status.episodeKey)
+                putExtra(EXTRA_SUBTITLE_URL, status.subtitleUrl); putExtra(EXTRA_SUBTITLE_REFERER, status.subtitleReferer)
+            }
+            enqueueInternal(request)
+        }
     }
 
     private fun removeDownload(intent: Intent) {
@@ -577,19 +655,17 @@ class LilacDownloadService : Service() {
 
     private fun cancelAll() {
         synchronized(lock) {
-            jobs.values.toList().forEach { it.cancel() }
-            jobs.clear()
-        }
-        MpvOfflineStore.listStatuses(applicationContext)
-            .filter { it.state == STATE_DOWNLOADING || it.state == STATE_QUEUED }
-            .forEach { status ->
-                MpvOfflineStore.saveStatus(applicationContext, status.copy(state = STATE_PAUSED))
+            MpvOfflineStore.listStatuses(applicationContext).filter { DownloadQueuePolicy.canPause(it.state) }.forEach {
+                pausedByUser += it.id
+                MpvOfflineStore.saveStatus(applicationContext, it.copy(state = STATE_PAUSED))
             }
+            jobs.values.toList().forEach { it.cancel() }
+        }
         maybeStopService(force = true)
     }
 
     private fun maybeStopService(force: Boolean = false) {
-        val active = synchronized(lock) { jobs.values.any { it.isActive } }
+        val active = synchronized(lock) { jobs.values.any { it.isActive } || pendingCommands > 0 }
         if (force || !active) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             if (force || MpvOfflineStore.listStatuses(applicationContext).none {
@@ -639,7 +715,7 @@ class LilacDownloadService : Service() {
         MpvOfflineStore.listStatuses(applicationContext)
             .filter { it.state == STATE_DOWNLOADING || it.state == STATE_QUEUED }
             .forEach { status ->
-                MpvOfflineStore.saveStatus(applicationContext, status.copy(state = STATE_PAUSED))
+                MpvOfflineStore.saveStatus(applicationContext, status.copy(state = STATE_QUEUED))
             }
         synchronized(lock) { jobs.values.toList().forEach { it.cancel() }; jobs.clear() }
         scope.cancel()
@@ -649,6 +725,8 @@ class LilacDownloadService : Service() {
     companion object {
         const val ACTION_DOWNLOAD = "com.lilac.anime.action.MPV_DOWNLOAD"
         const val ACTION_REMOVE = "com.lilac.anime.action.MPV_REMOVE"
+        const val ACTION_PAUSE = "com.lilac.anime.action.MPV_PAUSE"
+        const val ACTION_RESUME = "com.lilac.anime.action.MPV_RESUME"
         const val ACTION_CANCEL_ALL = "com.lilac.anime.action.MPV_CANCEL_ALL"
         const val EXTRA_ANIME_ID = "animeId"
         const val EXTRA_EPISODE_ID = "episodeId"

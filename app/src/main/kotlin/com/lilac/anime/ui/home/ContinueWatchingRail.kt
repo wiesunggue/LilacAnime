@@ -39,10 +39,10 @@ import androidx.compose.ui.unit.sp
 import com.lilac.anime.ui.AnimeImage
 
 @Composable
-fun ContinueWatchingRail(vm: AnimeViewModel, open: (Anime) -> Unit) {
+fun ContinueWatchingRail(vm: AnimeViewModel, open: (Anime) -> Unit, resume: ((Anime) -> Unit)? = null) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val allAvailableAnime = (vm.homeAnime + vm.allAnime).distinctBy { it.id }
-    val watchingAnime = vm.watchHistory.map { it.animeId }.distinct().mapNotNull { id -> allAvailableAnime.firstOrNull { it.id == id } }
+    val watchingAnime = vm.watchHistory.map { it.animeId }.distinct().mapNotNull { id -> vm.getAnime(context, id) ?: allAvailableAnime.firstOrNull { it.id == id } }
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectionMode by remember { mutableStateOf(false) }
 
@@ -82,7 +82,7 @@ fun ContinueWatchingRail(vm: AnimeViewModel, open: (Anime) -> Unit) {
                         onClick = { if (selectionMode) {
                             selectedIds = if (selected) selectedIds - anime.id else selectedIds + anime.id
                             if (selectedIds.isEmpty()) selectionMode = false
-                        } else open(anime) },
+                        } else (resume ?: open)(anime) },
                         onLongClick = { selectionMode = true; selectedIds = selectedIds + anime.id }
                     )
                 ) {
@@ -99,7 +99,7 @@ fun ContinueWatchingRail(vm: AnimeViewModel, open: (Anime) -> Unit) {
                         }
                         Spacer(Modifier.height(7.dp))
                         Text(anime.title, fontWeight = FontWeight.SemiBold, maxLines = 1, color = MaterialTheme.colorScheme.onBackground)
-                        Text("EP.${progress.episodeKey}", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                        Text("EP.${com.lilac.anime.data.PlaybackHistory.episodeLabel(progress.episodeKey, progress.episodeNumber)} · ${(com.lilac.anime.data.PlaybackHistory.fraction(progress.progress) * 100).toInt()}%", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                         Spacer(Modifier.height(5.dp))
                         LinearProgressIndicator(progress = { progress.progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(4.dp), color = Lilac)
                     }

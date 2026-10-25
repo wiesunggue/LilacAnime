@@ -322,7 +322,7 @@ object OfflineStore {
                     WatchProgress(
                         animeId = json.getString("animeId"),
                         episodeNumber = json.getInt("episodeNumber"),
-                        progress = json.getDouble("progress").toFloat(),
+                        progress = PlaybackHistory.fraction(json.getDouble("progress").toFloat()),
                         episodeKey = json.optString("episodeKey", json.getInt("episodeNumber").toString()),
                         updated = json.optLong("updated", 0L)
                     )

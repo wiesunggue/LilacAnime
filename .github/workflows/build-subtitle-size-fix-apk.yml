@@ -1,9 +1,9 @@
-name: Build desktop sync and subtitle markup APK
+name: Build Android functional parity APK
 
 on:
   push:
     branches:
-      - fix/device-sync-desktop-parity
+      - feat/android-functional-parity
   pull_request:
     branches:
       - main
@@ -90,8 +90,8 @@ jobs:
                   applicationId = "com.lilac.anime"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 34
-                  versionName = "0.4.1-alpha-5-desktop-sync-markup"
+                  versionCode = 35
+                  versionName = "0.4.1-alpha-6-functional"
 
                   ndk {
                       abiFilters += "arm64-v8a"
@@ -155,6 +155,7 @@ jobs:
               implementation("androidx.mediarouter:mediarouter:1.8.1")
               implementation("com.google.mlkit:translate:17.0.3")
               testImplementation("junit:junit:4.13.2")
+              testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
               testImplementation("org.json:json:20240303")
               implementation(kotlin("stdlib"))
               implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
@@ -178,7 +179,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: device-sync-markup-test-reports
+          name: functional-parity-test-reports
           path: app/build/test-results/testDebugUnitTest/
           if-no-files-found: ignore
           retention-days: 7
@@ -191,19 +192,20 @@ jobs:
         shell: bash
         run: |
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | head -8
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > apk-badging.txt
+          head -8 apk-badging.txt
 
       - name: Collect APK
         shell: bash
         run: |
           mkdir -p artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-desktop-sync-markup-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk artifacts/LilacAnime-functional-parity-debug.apk
           ls -lh artifacts/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LilacAnime-desktop-sync-markup-debug
-          path: artifacts/LilacAnime-desktop-sync-markup-debug.apk
+          name: LilacAnime-functional-parity-debug
+          path: artifacts/LilacAnime-functional-parity-debug.apk
           if-no-files-found: error
           retention-days: 7

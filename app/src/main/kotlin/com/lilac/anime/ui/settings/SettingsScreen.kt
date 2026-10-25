@@ -98,33 +98,38 @@ private fun DeviceSyncSettings(vm: AnimeViewModel) {
                     try {
                         val message = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { DeviceSyncClient.connect(context, url, secret) }
                         status = message
+                        vm.deviceSyncConnectionChanged()
                         serverUrl = DeviceSyncClient.savedServer(context)
                     } catch (e: Exception) { status = e.message ?: "서버 연결에 실패했습니다." }
                     finally { busy = false }
                 }
             }) { Text("연결") }
-            Button(enabled = !busy && DeviceSyncClient.isConnected(context), onClick = {
+            Button(enabled = !busy && !vm.deviceSyncBusy && vm.deviceSyncConnected, onClick = {
                 busy = true
                 status = "동기화 중…"
                 scope.launch {
                     try {
-                        val library = vm.library.toSet()
-                        val history = vm.watchHistory.toList()
-                        val metadata = (library + history.map { it.animeId }).mapNotNull { id -> vm.getAnime(context, id)?.let { id to it.copy(episodes = vm.episodes(it)) } }.toMap()
-                        val result = DeviceSyncClient.sync(context, library, history, metadata,
-                            readFresh = { vm.library to vm.watchHistory },
-                            apply = { syncedLibrary, syncedHistory -> vm.applySyncedCollections(context, syncedLibrary, syncedHistory) })
+                        val result = vm.syncDeviceNow()
                         status = "동기화 완료 · 보냄 ${result.sent}개 · 받음 ${result.received}개 · 리비전 ${result.revision}"
                     } catch (e: Exception) { status = e.message ?: "동기화에 실패했습니다." }
                     finally { busy = false }
                 }
             }) { Text("지금 동기화") }
-            OutlinedButton(enabled = !busy && DeviceSyncClient.isConnected(context), onClick = {
+            OutlinedButton(enabled = !busy && !vm.deviceSyncBusy && vm.deviceSyncConnected, onClick = {
                 DeviceSyncClient.disconnect(context)
+                vm.deviceSyncConnectionChanged()
                 status = "연결 해제됨. 서버 주소는 유지됩니다."
             }) { Text("연결 해제") }
         }
-        if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("자동 동기화", fontWeight = FontWeight.Medium)
+                Text("앱 시작·복귀, 목록 변경, 사용 중 5분마다 동기화합니다.", fontSize = 11.sp)
+            }
+            Switch(checked = vm.automaticDeviceSync, onCheckedChange = vm::setAutomaticDeviceSync)
+        }
+        Text(vm.deviceSyncMessage, fontSize = 12.sp)
+        if (busy || vm.deviceSyncBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f))
         Text("비밀번호는 저장하지 않습니다. 로그인 토큰은 Android Keystore 기반 AES-GCM으로 암호화해 저장합니다. 외부 서버는 HTTPS를 사용하세요.", fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
     }
@@ -171,6 +176,8 @@ fun SettingsScreen(
             HorizontalDivider()
             Spacer(Modifier.height(20.dp))
 
+            OutlinedButton(onClick = { onNavigate("downloads") }, modifier = Modifier.fillMaxWidth()) { Text("다운로드 관리 · 일시정지 / 이어받기 / 재시도") }
+            Spacer(Modifier.height(16.dp))
             Text("재생 및 자막 설정", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(16.dp))
 

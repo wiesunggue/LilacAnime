@@ -54,7 +54,9 @@ object MpvOfflineStore {
         val streamHeaders: String? = null,
         val episodeNumber: Int = 0,
         val episodeKey: String = "",
-        val videoSource: String = "linkkf"
+        val videoSource: String = "linkkf",
+        val subtitleUrl: String? = null,
+        val subtitleReferer: String? = null
     )
 
     fun root(context: Context): File = File(context.filesDir, ROOT)
@@ -155,6 +157,8 @@ object MpvOfflineStore {
         status.referer?.let { obj.put("referer", it) }
         status.flixCloudPk?.let { obj.put("flixCloudPk", it) }
         status.streamHeaders?.let { obj.put("streamHeaders", it) }
+        status.subtitleUrl?.let { obj.put("subtitleUrl", it) }
+        status.subtitleReferer?.let { obj.put("subtitleReferer", it) }
         // A remove/cancel request can delete the episode directory concurrently
         // with a cancellation-state write. Re-create the directory immediately
         // before opening the temp file so a transient ENOENT cannot crash the
@@ -213,7 +217,9 @@ object MpvOfflineStore {
             streamHeaders = obj.optString("streamHeaders").takeIf { it.isNotBlank() },
             episodeNumber = obj.optInt("episodeNumber", 0),
             episodeKey = obj.optString("episodeKey"),
-            videoSource = obj.optString("videoSource", "linkkf").takeIf { it in setOf("linkkf", "animenosub", "reanime", "miruro", "ohli24") } ?: "linkkf"
+            videoSource = obj.optString("videoSource", "linkkf").takeIf { it in setOf("linkkf", "animenosub", "reanime", "miruro", "ohli24") } ?: "linkkf",
+            subtitleUrl = obj.optString("subtitleUrl").takeIf { it.isNotBlank() },
+            subtitleReferer = obj.optString("subtitleReferer").takeIf { it.isNotBlank() }
         )
     }.getOrNull()
 

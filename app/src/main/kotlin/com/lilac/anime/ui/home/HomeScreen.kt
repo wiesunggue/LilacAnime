@@ -190,7 +190,7 @@ fun HomeScreen(
 
                 if (vm.watchHistory.isNotEmpty()) {
                     item { RailTitle("계속 시청하기") }
-                    item { ContinueWatchingRail(vm = vm, open = openDetail) }
+                    item { ContinueWatchingRail(vm = vm, open = openDetail, resume = { onNavigate("resume/${android.net.Uri.encode(it.id)}") }) }
                 }
 
                 if (vm.linkkfPvTrailers.isNotEmpty()) {
@@ -227,7 +227,7 @@ fun HomeScreen(
             } else {
                 if (vm.watchHistory.isNotEmpty()) {
                     item { RailTitle("계속 시청하기") }
-                    item { ContinueWatchingRail(vm = vm, open = openDetail) }
+                    item { ContinueWatchingRail(vm = vm, open = openDetail, resume = { onNavigate("resume/${android.net.Uri.encode(it.id)}") }) }
                 }
 
                 if (vm.homeAnime.isNotEmpty()) {

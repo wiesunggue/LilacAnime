@@ -248,7 +248,7 @@ fun LilacApp(vm: AnimeViewModel = viewModel()) {
                                 playEpisode = { ep -> nav.navigate("player/${currentItem.id}/${Uri.encode(ep.id)}") },
                                 openRelated = { related -> vm.cacheAnime(related); nav.navigate("detail/${related.id}") }
                             )
-                        } else if (vm.playerSettings.videoSourcePreference == "reanime") {
+                        } else if (PlaybackHistory.sourceFor(currentItem, vm.playerSettings.videoSourcePreference) == "reanime") {
                             ReAnimeDetailScreen(
                                 vm = vm,
                                 anime = currentItem,
@@ -311,70 +311,14 @@ fun LilacApp(vm: AnimeViewModel = viewModel()) {
                 }
             }
 
-            composable("player/{animeId}/{episodeKey}") { backStack ->
-                val animeId = backStack.arguments?.getString("animeId")
-                val episodeKey = backStack.arguments?.getString("episodeKey")?.let(Uri::decode)
-                var anime by remember { mutableStateOf(animeId?.let { vm.getAnime(context, it) }) }
-                var episode by remember { mutableStateOf<Episode?>(null) }
-
-                LaunchedEffect(animeId, episodeKey) {
-                    if (anime == null && animeId != null) {
-                        anime = OfflineStore.getAnime(context, animeId)
-                    }
-                    val targetAnime = anime
-                    if (targetAnime != null && !episodeKey.isNullOrBlank()) {
-                        val epFromCache = vm.episodes(targetAnime).firstOrNull { it.id == episodeKey }
-                            ?: vm.dubEpisodes(targetAnime).firstOrNull { it.id == episodeKey }
-                            ?: vm.episodes(targetAnime).firstOrNull { it.displayNumber.equals(episodeKey, ignoreCase = true) }
-                            ?: vm.dubEpisodes(targetAnime).firstOrNull { it.displayNumber.equals(episodeKey, ignoreCase = true) }
-                        if (epFromCache != null) {
-                            episode = epFromCache
-                        } else {
-                            val number = Regex("^\\d+").find(episodeKey)?.value?.toIntOrNull()
-                            val stored = if (number != null) {
-                                OfflineStore.getEpisodesForAnime(context, targetAnime.id)
-                                    .firstOrNull { it.id == episodeKey || it.displayNumber.equals(episodeKey, ignoreCase = true) }
-                                    ?: OfflineStore.getEpisode(context, targetAnime.id, number)
-                            } else null
-                            if (stored != null) {
-                                episode = stored
-                            } else if (number != null) {
-                                episode = Episode(
-                                    id = episodeKey,
-                                    number = number,
-                                    title = "${episodeKey}화",
-                                    displayNumber = episodeKey
-                                )
-                            }
-                        }
-                    }
-                }
-
-                val currentAnime = anime
-                val currentEpisode = episode
-
-                when {
-                    currentAnime != null && currentEpisode != null -> {
-                        PlayerScreen(
-                            anime = currentAnime,
-                            episode = currentEpisode,
-                            vm = vm,
-                            back = { nav.popBackStack() }
-                        )
-                    }
-                    vm.loading -> {
-                        FullScreenState(message = "불러오는 중...", isLoading = true)
-                    }
-                    else -> {
-                        FullScreenState(
-                            message = "재생할 항목을 찾을 수 없습니다.",
-                            isLoading = false,
-                            onRetry = { vm.loadAnime(context) },
-                            onBack = { nav.popBackStack() }
-                        )
-                    }
-                }
+            composable("downloads") { DownloadManagerScreen(vm, { nav.popBackStack() }, { nav.navigate(it) }) }
+            composable("resume/{animeId}") { entry ->
+                PlaybackEntryScreen(vm, entry.arguments?.getString("animeId"), null) { nav.popBackStack() }
             }
+            composable("player/{animeId}/{episodeKey}") { entry ->
+                PlaybackEntryScreen(vm, entry.arguments?.getString("animeId"), entry.arguments?.getString("episodeKey")?.let(Uri::decode)) { nav.popBackStack() }
+            }
+
         }
     }
 }

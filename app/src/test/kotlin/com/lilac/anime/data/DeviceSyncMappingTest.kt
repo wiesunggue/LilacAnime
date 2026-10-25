@@ -14,7 +14,7 @@ class DeviceSyncMappingTest {
         assertEquals("reanime:frieren", DeviceSyncMapping.wireAnimeId("reanime:frieren"))
     }
     @Test fun reanimeUsesPcEpisodeUrlAndPersistsWatchTime() {
-        val w = WatchProgress("reanime:frieren", 3, 42f, "reanime:frieren:ep-3", 12345L)
+        val w = WatchProgress("reanime:frieren", 3, .42f, "reanime:frieren:ep-3", 12345L)
         val local = DeviceSyncMapping.local(setOf(w.animeId), listOf(w), mapOf(w.animeId to Anime(id=w.animeId, title="프리렌")), JSONObject())
         val id = "reanime:https://reanime.to/watch/frieren?ep=3"
         assertEquals(id, DeviceSyncMapping.historyId(w))
@@ -33,9 +33,9 @@ class DeviceSyncMappingTest {
         assertEquals(pc.getJSONObject("history").keys().next(), roundtrip.getJSONObject("history").keys().next())
     }
     @Test fun unsupportedPcProvidersAreRetainedAndDoNotBecomeAndroidFavorites() {
-        val previous = JSONObject("""{"library":{"miruro:123":{"mal_id":"miruro:123","title":"PC 전용"}},"history":{}}""")
+        val previous = JSONObject("""{"library":{"unknown:123":{"mal_id":"unknown:123","title":"PC 전용"}},"history":{}}""")
         val local = DeviceSyncMapping.local(emptySet(), emptyList(), emptyMap(), previous)
-        assertTrue(local.getJSONObject("library").has("miruro:123"))
+        assertTrue(local.getJSONObject("library").has("unknown:123"))
         assertTrue(DeviceSyncMapping.library(local).isEmpty())
     }
     @Test fun canonicalHashIsIndependentOfJsonOrderButTracksRealChangeTimes() {
@@ -60,14 +60,44 @@ class DeviceSyncMappingTest {
         assertEquals("poster", data.getJSONObject("images").getJSONObject("webp").getString("large_image_url"))
     }
     @Test fun unchangedListsHaveStableHashesAcrossSyncRuns() {
-        val w = WatchProgress("reanime:frieren", 1, 10f, "reanime:frieren:ep-1", 100L)
+        val w = WatchProgress("reanime:frieren", 1, .10f, "reanime:frieren:ep-1", 100L)
         val first = DeviceSyncMapping.local(setOf(w.animeId), listOf(w), emptyMap(), JSONObject())
         val second = DeviceSyncMapping.local(setOf(w.animeId), listOf(w), emptyMap(), first)
         assertEquals(DeviceSyncMapping.hash(first), DeviceSyncMapping.hash(second))
     }
     @Test fun linkaniFallbackIncludesTheSourceVersionSegment() {
         assertEquals("linkani:https://linkani.tv/watch/123/a1/k4a/",
-            DeviceSyncMapping.historyId(WatchProgress("123", 4, 20f, "123_ep_4a")))
+            DeviceSyncMapping.historyId(WatchProgress("123", 4, .20f, "123_ep_4a")))
+    }
+    @Test fun progressUsesPcPercentAndAndroidFraction() {
+        val w = WatchProgress("reanime:frieren", 3, .42f, "reanime:frieren:ep-3", 100L)
+        val local = DeviceSyncMapping.local(emptySet(), listOf(w), emptyMap(), JSONObject())
+        val data = local.getJSONObject("history").getJSONObject(DeviceSyncMapping.historyId(w))
+        assertEquals(42.0, data.getDouble("progress"), .001)
+        assertEquals("percent", data.getString("progressUnit"))
+        assertEquals(.42f, DeviceSyncMapping.history(local).single().progress, .0001f)
+    }
+    @Test fun legacyAndroidProgressIsUpgradedWithoutPretendingItWasWatchedNow() {
+        val previous = JSONObject("""{"library":{},"history":{"reanime:https://reanime.to/watch/x?ep=1":{"key":"reanime:https://reanime.to/watch/x?ep=1","androidAnimeId":"reanime:x","androidEpisodeKey":"reanime:x:ep-1","anime":{"mal_id":"reanime:x"},"episode":{"number":1},"progress":0.5,"updated":100}}}""")
+        val local = DeviceSyncMapping.local(emptySet(), DeviceSyncMapping.history(previous), emptyMap(), previous)
+        val data = local.getJSONObject("history").getJSONObject(local.getJSONObject("history").keys().next())
+        assertEquals(50.0, data.getDouble("progress"), .001)
+        assertEquals(101L, data.getLong("updated"))
+        assertEquals(.5f, DeviceSyncMapping.history(local).single().progress, .0001f)
+    }
+    @Test fun syncedArtworkIsAvailableWithoutAnEntireCatalogDownload() {
+        val data = JSONObject("""{"library":{"reanime:x":{"provider":"reanime","mal_id":"reanime:x","id":"x","title":"작품","images":{"webp":{"large_image_url":"https://example.com/poster.jpg"}},"url":"https://reanime.to/anime/x"}},"history":{}}""")
+        val anime = DeviceSyncMapping.animeMetadata(data).getValue("reanime:x")
+        assertEquals("작품", anime.title); assertEquals("https://example.com/poster.jpg", anime.poster)
+        assertEquals("reanime", anime.source)
+    }
+    @Test fun allFiveNativeSourcesRetainTheirFavoritesDuringSync() {
+        val ids = setOf("123", "reanime:x", "miruro:x", "animenosub:x", "ohli24:x")
+        val local = DeviceSyncMapping.local(ids, emptyList(), emptyMap(), JSONObject())
+        assertEquals(ids, DeviceSyncMapping.library(local))
+        val metadata = DeviceSyncMapping.animeMetadata(local)
+        assertEquals("miruro", metadata.getValue("miruro:x").source)
+        assertEquals("ohli24", metadata.getValue("ohli24:x").source)
     }
     @Test fun tombstonesRemoveTheExactWireKey() {
         val local = DeviceSyncMapping.local(setOf("123"), emptyList(), emptyMap(), JSONObject())

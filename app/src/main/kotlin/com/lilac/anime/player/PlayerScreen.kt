@@ -206,6 +206,7 @@ fun PlayerScreen(
     back: () -> Unit
 ) {
     val context = LocalContext.current
+    val playbackSource = com.lilac.anime.data.PlaybackHistory.sourceFor(anime, vm.playerSettings.videoSourcePreference)
     val activity = context as? Activity
     // Foreground playback gets a fresh libmpv session on every PlayerScreen
     // entry.  The only time the process-wide instance is intentionally reused is
@@ -794,7 +795,7 @@ fun PlayerScreen(
     }
 
     fun leave() {
-        vm.updateProgress(
+        if (engine.duration > 0) vm.updateProgress(
             context,
             anime.id,
             currentEpisode.number,
@@ -1218,7 +1219,7 @@ fun PlayerScreen(
             return@LaunchedEffect
         }
 
-        val source = vm.playerSettings.videoSourcePreference
+        val source = playbackSource
         if (source == "reanime") {
             // Re:ANIME episodes are watch references, not direct media URLs.
             // Always rebuild the canonical /watch/{slug}?ep=N target when an older
@@ -1387,7 +1388,7 @@ fun PlayerScreen(
                         vttUrl = subtitleToFetch,
                         episodeKey = currentEpisode.id,
                         referer = resolved.subtitleReferer ?: resolved.referer,
-                        source = vm.playerSettings.videoSourcePreference.takeIf { it in setOf("linkkf", "animenosub", "reanime", "miruro", "ohli24") } ?: "linkkf"
+                        source = playbackSource.takeIf { it in setOf("linkkf", "animenosub", "reanime", "miruro", "ohli24") } ?: "linkkf"
                     )
                 }.getOrNull()
                 if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
@@ -1405,7 +1406,7 @@ fun PlayerScreen(
 
     // Re:ANIME/FlixCloud stream resolver. The WebView is deliberately 1dp and transparent:
     // it only observes the provider request; libmpv remains the visible playback surface.
-    val extractorSource = vm.playerSettings.videoSourcePreference
+    val extractorSource = playbackSource
     if (extractorSource in setOf("reanime", "animenosub") &&
         offlineResolutionComplete &&
         !offlinePlaybackActive &&
@@ -1427,7 +1428,7 @@ fun PlayerScreen(
             onQualitiesFound = { qualities ->
                 if (generation != playbackGeneration ||
                     resolvedVideoPageUrl != extractorTargetUrl ||
-                    vm.playerSettings.videoSourcePreference != extractorSource
+                    playbackSource != extractorSource
                 ) return@StreamUrlExtractor
 
                 parsedStreamingQualities = qualities
@@ -1555,7 +1556,7 @@ fun PlayerScreen(
     // WebView. Hand the detected URL and captured request headers to libmpv here.
     LaunchedEffect(streamUrl, currentEpisode.id, playbackGeneration) {
         val generation = playbackGeneration
-        val activeSource = vm.playerSettings.videoSourcePreference
+        val activeSource = playbackSource
         if (activeSource !in setOf("reanime", "animenosub")) return@LaunchedEffect
         val url = streamUrl?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         if (url.startsWith("/") || url.startsWith("file://")) return@LaunchedEffect
@@ -1748,6 +1749,18 @@ fun PlayerScreen(
         }
     }
 
+    // Save during playback too: leaving the app or losing the process must not
+    // lose the whole episode's progress or leave the PC with yesterday's state.
+    LaunchedEffect(engine, currentEpisode.id) {
+        while (isActive) {
+            delay(5_000L)
+            if (!loading && engine.duration > 0L && engine.loadedLoadGeneration > 0L) {
+                vm.updateProgress(context, anime.id, currentEpisode.number,
+                    (engine.currentPosition.toDouble() / engine.duration).toFloat().coerceIn(0f, 1f), currentEpisode.id)
+            }
+        }
+    }
+
     // Natural end-of-file -> next episode. This uses the engine's real EOF
     // event, not a guessed percentage threshold.
     LaunchedEffect(engine, currentEpisode.id, nextEpisode) {
@@ -1764,6 +1777,7 @@ fun PlayerScreen(
                 val hasLoadedMedia = observedEngine.loadedLoadGeneration > 0L
                 Log.i("MpvEpisode", "EOF_EVENT episode=${currentEpisode.displayNumber} observed=$observedEpisodeId stillCurrent=$stillCurrent loaded=$hasLoadedMedia autoPlay=${vm.playerSettings.autoPlay} next=${nextEpisode?.displayNumber}")
                 if (stillCurrent && hasLoadedMedia && vm.playerSettings.autoPlay && nextEpisode != null) {
+                    vm.updateProgress(context, anime.id, currentEpisode.number, 1f, currentEpisode.id)
                     switchEpisode(nextEpisode)
                     break
                 }
@@ -2658,7 +2672,7 @@ fun PlayerScreen(
                                 }
                             }
 
-                            if (vm.playerSettings.videoSourcePreference == "reanime") {
+                            if (playbackSource == "reanime") {
                                 Spacer(Modifier.height(8.dp))
                                 Surface(
                                     onClick = { reAnimeSubtitleTrackPickerOpen = true },

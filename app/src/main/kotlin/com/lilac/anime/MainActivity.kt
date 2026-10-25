@@ -343,6 +343,18 @@ class MainActivity : FragmentActivity() {
         setContent {
             val viewModel: AnimeViewModel = viewModel()
             val context = LocalContext.current
+            DisposableEffect(viewModel) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                    when (event) {
+                        androidx.lifecycle.Lifecycle.Event.ON_START -> viewModel.setAppForeground(true)
+                        androidx.lifecycle.Lifecycle.Event.ON_STOP -> viewModel.setAppForeground(false)
+                        else -> Unit
+                    }
+                }
+                lifecycle.addObserver(observer)
+                viewModel.setAppForeground(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED))
+                onDispose { lifecycle.removeObserver(observer); viewModel.setAppForeground(false) }
+            }
 
             var pendingRelease by remember {
                 mutableStateOf<GithubReleaseInfo?>(null)

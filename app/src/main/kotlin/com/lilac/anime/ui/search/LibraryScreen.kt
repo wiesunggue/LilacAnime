@@ -59,7 +59,7 @@ fun LibraryScreen(
     }
 
     val allAnimeList = (vm.allAnime + vm.homeAnime).distinctBy { it.id }
-    val savedAnime = allAnimeList.filter { it.id in vm.library }
+    val savedAnime = vm.library.mapNotNull { id -> vm.getAnime(context, id) ?: allAnimeList.firstOrNull { it.id == id } }
 
     var selectedTab by remember { mutableIntStateOf(if (isOffline) 1 else 0) }
 

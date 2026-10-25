@@ -19,6 +19,10 @@ import com.lilac.anime.ui.theme.*
 
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import com.lilac.anime.core.sync.AutoSyncController
 
 import android.content.Context
 import android.content.Intent
@@ -262,7 +266,7 @@ class AnimeViewModel : ViewModel() {
         private set
 
     private val detailCache = mutableStateMapOf<String, Anime>()
-    private val animeCache = mutableMapOf<String, Anime>()
+    private val animeCache = mutableStateMapOf<String, Anime>()
 
     private val episodeCache = mutableStateMapOf<String, List<Episode>>()
     private val dubEpisodeCache = mutableStateMapOf<String, List<Episode>>()
@@ -282,6 +286,65 @@ class AnimeViewModel : ViewModel() {
     var watchHistoryLoaded by mutableStateOf(false)
         private set
 
+    var deviceSyncBusy by mutableStateOf(false)
+        private set
+    var deviceSyncMessage by mutableStateOf("서버를 연결하면 자동으로 동기화합니다.")
+        private set
+    var deviceSyncConnected by mutableStateOf(DeviceSyncClient.isConnected(appContext))
+        private set
+    var automaticDeviceSync by mutableStateOf(DeviceSyncClient.automaticSyncEnabled(appContext))
+        private set
+    private var syncNeedsLogin = false
+    private val deviceSyncMutex = Mutex()
+    private val syncController by lazy {
+        AutoSyncController(viewModelScope,
+            canSync = { deviceSyncConnected && automaticDeviceSync && watchHistoryLoaded && !_isOffline.value && !syncNeedsLogin },
+            synchronize = { syncDeviceNow() },
+            retryable = { it !is DeviceSyncClient.RequestException || it.code !in setOf(400, 401, 403, 413) },
+            now = { android.os.SystemClock.elapsedRealtime() })
+    }
+    private val _downloadStatuses = MutableStateFlow<List<MpvOfflineStore.Status>>(emptyList())
+    val downloadStatuses: StateFlow<List<MpvOfflineStore.Status>> = _downloadStatuses
+
+    fun setAppForeground(foreground: Boolean) { syncController.setForeground(foreground) }
+    fun setAutomaticDeviceSync(enabled: Boolean) {
+        automaticDeviceSync = enabled
+        DeviceSyncClient.setAutomaticSyncEnabled(appContext, enabled)
+        if (enabled) syncController.refresh()
+    }
+    fun deviceSyncConnectionChanged() {
+        deviceSyncConnected = DeviceSyncClient.isConnected(appContext)
+        syncNeedsLogin = false
+        deviceSyncMessage = if (deviceSyncConnected) "서버 연결 완료 · 동기화를 준비합니다." else "서버 연결이 해제되었습니다."
+        if (deviceSyncConnected) syncController.refresh()
+    }
+    suspend fun syncDeviceNow(): DeviceSyncClient.SyncResult = withContext(Dispatchers.Main) {
+        deviceSyncMutex.withLock {
+            check(watchHistoryLoaded) { "시청 기록을 불러오는 중입니다. 잠시 뒤 다시 시도하세요." }
+            deviceSyncBusy = true
+            deviceSyncMessage = "목록과 시청 기록을 동기화하는 중…"
+            try {
+                val initialLibrary = library.toSet(); val initialHistory = watchHistory.toList()
+                val metadata = (initialLibrary + initialHistory.map { it.animeId }).mapNotNull { id ->
+                    getAnime(appContext, id)?.let { id to it.copy(episodes = episodes(it)) }
+                }.toMap()
+                val result = DeviceSyncClient.sync(appContext, initialLibrary, initialHistory, metadata,
+                    readFresh = { library to watchHistory },
+                    apply = { lib, hist -> applySyncedCollections(appContext, lib, hist) })
+                val synced = withContext(Dispatchers.IO) { DeviceSyncClient.cachedAnime(appContext) }
+                synced.forEach { (id, anime) -> animeCache.putIfAbsent(id, anime) }
+                syncNeedsLogin = false
+                deviceSyncMessage = "동기화 완료 · 보냄 ${result.sent}개 · 받음 ${result.received}개"
+                result
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                syncNeedsLogin = error is DeviceSyncClient.RequestException && error.code in setOf(401, 403)
+                deviceSyncMessage = if (syncNeedsLogin) "서버 비밀번호가 변경되었거나 인증이 만료되었습니다. 다시 연결하세요." else "동기화 실패: ${error.message ?: "네트워크 오류"}"
+                throw error
+            } finally { deviceSyncBusy = false }
+        }
+    }
+
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     init {
@@ -295,7 +358,9 @@ class AnimeViewModel : ViewModel() {
                 var hasActiveDownloads = false
 
                 // New downloads are owned by the mpv-native downloader.
-                MpvOfflineStore.listStatuses(appContext).forEach { status ->
+                val statuses = MpvOfflineStore.listStatuses(appContext)
+                _downloadStatuses.value = statuses
+                statuses.forEach { status ->
                     if (status.state == "downloading" || status.state == "queued") {
                         hasActiveDownloads = true
                         progressMap[status.id] = status.progress
@@ -359,17 +424,17 @@ class AnimeViewModel : ViewModel() {
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                _isOffline.value = false
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                val online = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                val restored = _isOffline.value && online
+                _isOffline.value = !online
+                if (restored) viewModelScope.launch { syncController.refresh() }
             }
-
-            override fun onLost(network: Network) {
-                _isOffline.value = true
-            }
+            override fun onLost(network: Network) { _isOffline.value = true }
         }
         
         networkCallback = callback
-        cm.registerNetworkCallback(request, callback)
+        cm.registerDefaultNetworkCallback(callback)
 
         refreshDownloads()
     }
@@ -445,6 +510,7 @@ class AnimeViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             val lib = OfflineStore.getLibrary(context)
             val history = OfflineStore.getWatchHistory(context)
+            val syncedAnime = DeviceSyncClient.cachedAnime(context)
             val settings = OfflineStore.getPlayerSettings(context)
             val source = settings.videoSourcePreference
             // Home is intentionally NEVER served from the catalog cache.
@@ -453,6 +519,8 @@ class AnimeViewModel : ViewModel() {
                 library = lib
                 watchHistory = history
                 watchHistoryLoaded = true
+                syncedAnime.forEach { (id, anime) -> animeCache.putIfAbsent(id, anime) }
+                syncController.refresh()
                 playerSettings = settings
                 homeAnime = emptyList()
                 loading = true
@@ -852,7 +920,7 @@ class AnimeViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    repository.getAnimeDetail(target, playerSettings.videoSourcePreference)
+                    repository.getAnimeDetail(target, PlaybackHistory.sourceFor(target, playerSettings.videoSourcePreference))
                 }
                 detailCache[result.id] = result
                 animeCache[result.id] = result
@@ -905,6 +973,35 @@ class AnimeViewModel : ViewModel() {
             ?: allAnime.firstOrNull { it.id == id }
     }
 
+    suspend fun resolvePlaybackTarget(context: Context, animeId: String, requestedKey: String? = null): Pair<Anime, Episode> = withContext(Dispatchers.Main) {
+        var anime = getAnime(context, animeId) ?: withContext(Dispatchers.IO) { OfflineStore.getAnime(context, animeId) }
+            ?: throw IllegalStateException("작품 정보를 찾지 못했습니다. 목록을 동기화하거나 작품을 다시 검색하세요.")
+        val source = PlaybackHistory.sourceFor(anime, playerSettings.videoSourcePreference)
+        var candidates = (episodes(anime) + dubEpisodes(anime) + anime.episodes).distinctBy { it.id }
+        if (candidates.isEmpty()) candidates = withContext(Dispatchers.IO) { OfflineStore.getEpisodesForAnime(context, animeId) }
+        val latest = getLatestProgress(animeId)
+        val key = requestedKey ?: latest?.episodeKey
+        val label = key?.let {
+            if ("_ep_" in it || ":ep-" in it || Regex("\\d+[a-zA-Z]*").matches(it)) PlaybackHistory.episodeLabel(it, latest?.episodeNumber ?: 0)
+            else if (requestedKey == null && latest != null) PlaybackHistory.episodeLabel(it, latest.episodeNumber) else null
+        }
+        fun find(list: List<Episode>): Episode? = list.firstOrNull { it.id == key }
+            ?: list.firstOrNull { label != null && it.displayNumber.equals(label, true) }
+        if (!_isOffline.value && (candidates.isEmpty() || (key != null && find(candidates) == null))) {
+            val detail = withContext(Dispatchers.IO) { repository.getAnimeDetail(anime, source) }
+            val loaded = withContext(Dispatchers.IO) { repository.getEpisodes(detail, source) }
+            anime = detail; candidates = loaded
+        }
+        check(candidates.isNotEmpty()) { if (_isOffline.value) "저장된 회차가 없습니다. 인터넷 연결 후 다시 시도하세요." else "재생할 회차를 찾지 못했습니다." }
+        val ordered = candidates.sortedWith(compareBy<Episode> { it.number }.thenBy { it.displayNumber })
+        var episode = find(ordered) ?: if (key == null) ordered.first() else throw IllegalStateException("해당 회차를 찾지 못했습니다. 작품의 회차 목록을 새로고침하세요.")
+        if (requestedKey == null && latest != null && PlaybackHistory.fraction(latest.progress) >= .95f) {
+            episode = ordered.getOrNull(ordered.indexOf(episode) + 1) ?: episode
+        }
+        animeCache[animeId] = anime; detailCache[animeId] = anime; episodeCache[animeId] = ordered
+        anime to episode
+    }
+
     fun episodes(anime: Anime): List<Episode> {
         return episodeCache[anime.id] ?: emptyList()
     }
@@ -937,18 +1034,18 @@ class AnimeViewModel : ViewModel() {
         episodeLoading[anime.id] = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val targetAnime = detailCache[anime.id] ?: repository.getAnimeDetail(anime, playerSettings.videoSourcePreference).also {
+                val targetAnime = detailCache[anime.id] ?: repository.getAnimeDetail(anime, PlaybackHistory.sourceFor(anime, playerSettings.videoSourcePreference)).also {
                     withContext(Dispatchers.Main) {
                         detailCache[it.id] = it
                         animeCache[it.id] = it
                     }
                 }
 
-                val result = if (playerSettings.videoSourcePreference == "linkkf" && linkkfEpisodeServers.isNotEmpty()) {
+                val result = if (PlaybackHistory.sourceFor(targetAnime, playerSettings.videoSourcePreference) == "linkkf" && linkkfDetailAnimeId == targetAnime.id && linkkfEpisodeServers.isNotEmpty()) {
                     linkkfEpisodeServers.firstOrNull { it.id == linkkfSelectedServerId }?.episodes
                         ?: linkkfEpisodeServers.first().episodes
                 } else {
-                    repository.getEpisodes(targetAnime, playerSettings.videoSourcePreference)
+                    repository.getEpisodes(targetAnime, PlaybackHistory.sourceFor(targetAnime, playerSettings.videoSourcePreference))
                 }
                 
                 withContext(Dispatchers.Main) {
@@ -1083,6 +1180,7 @@ class AnimeViewModel : ViewModel() {
     fun toggleLibrary(context: Context, animeId: String) {
         if (animeId !in library) DeviceSyncClient.libraryAdded(context, animeId)
         library = if (animeId in library) library - animeId else library + animeId
+        syncController.request()
         val updated = library
         viewModelScope.launch(Dispatchers.IO) {
             OfflineStore.saveLibrary(context, updated)
@@ -1094,30 +1192,30 @@ class AnimeViewModel : ViewModel() {
     }
 
     fun updateProgress(context: Context, animeId: String, episodeNumber: Int, progress: Float, episodeKey: String = episodeNumber.toString()) {
-        val filtered = watchHistory.filterNot { it.animeId == animeId && it.episodeKey.equals(episodeKey, ignoreCase = true) }
-        val updatedItem = WatchProgress(animeId = animeId, episodeNumber = episodeNumber, progress = progress, episodeKey = episodeKey, updated = System.currentTimeMillis())
-        val newList = listOf(updatedItem) + filtered
+        if (!progress.isFinite()) return
+        val previous = PlaybackHistory.find(watchHistory, animeId, episodeKey, episodeNumber)
+        if (previous != null && kotlin.math.abs(previous.progress - PlaybackHistory.fraction(progress)) < .0001f && System.currentTimeMillis() - previous.updated < 30_000L) return
+        val filtered = watchHistory.filterNot { it === previous || (it.animeId == animeId && it.episodeKey.equals(episodeKey, ignoreCase = true)) }
+        val updatedItem = WatchProgress(animeId = animeId, episodeNumber = episodeNumber, progress = PlaybackHistory.fraction(progress), episodeKey = episodeKey, updated = System.currentTimeMillis())
+        val newList = (listOf(updatedItem) + filtered).take(300)
         watchHistory = newList
+        syncController.request()
         viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveWatchHistory(context, newList) }
     }
 
     fun getLatestProgress(animeId: String): WatchProgress? = watchHistory.firstOrNull { it.animeId == animeId }
 
     fun getProgress(animeId: String, episodeKey: String, episodeNumber: Int): WatchProgress? =
-        watchHistory.firstOrNull {
-            it.animeId == animeId &&
-                it.episodeNumber == episodeNumber &&
-                (it.episodeKey.equals(episodeKey, ignoreCase = true) ||
-                    (it.episodeKey == it.episodeNumber.toString() && episodeKey == episodeNumber.toString()))
-        }
+        PlaybackHistory.find(watchHistory, animeId, episodeKey, episodeNumber)
 
     fun getProgress(animeId: String, episodeNumber: Int): WatchProgress? =
-        watchHistory.firstOrNull { it.animeId == animeId && it.episodeNumber == episodeNumber && it.episodeKey == episodeNumber.toString() }
+        PlaybackHistory.find(watchHistory, animeId, episodeNumber.toString(), episodeNumber)
 
     fun deleteWatchHistory(context: Context, animeIds: Set<String>) {
         if (animeIds.isEmpty()) return
         val newList = watchHistory.filterNot { it.animeId in animeIds }
         watchHistory = newList
+        syncController.request()
         viewModelScope.launch(Dispatchers.IO) {
             OfflineStore.saveWatchHistory(context, newList)
         }
@@ -1125,6 +1223,7 @@ class AnimeViewModel : ViewModel() {
 
     fun clearWatchHistory(context: Context) {
         watchHistory = emptyList()
+        syncController.request()
         viewModelScope.launch(Dispatchers.IO) {
             OfflineStore.saveWatchHistory(context, emptyList())
         }
@@ -1150,6 +1249,14 @@ class AnimeViewModel : ViewModel() {
         // 오프라인 메타데이터/자막 파일 정리
         deleteDownload(context, anime, episode)
     }
+    override fun onCleared() {
+        syncController.close()
+        networkCallback?.let { callback ->
+            runCatching { (appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(callback) }
+        }
+        super.onCleared()
+    }
+
 }
 
 // ==========================================

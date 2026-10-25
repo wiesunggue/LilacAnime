@@ -42,6 +42,13 @@ object DeviceSyncClient {
     fun savedServer(context: Context): String = prefs(context).getString(KEY_URL, "") ?: ""
     fun isConnected(context: Context): Boolean = decryptToken(context).isNotBlank()
 
+    class RequestException(val code: Int, message: String) : IllegalStateException(message)
+    fun automaticSyncEnabled(context: Context): Boolean = prefs(context).getBoolean("automatic_sync", true)
+    fun setAutomaticSyncEnabled(context: Context, enabled: Boolean) { prefs(context).edit().putBoolean("automatic_sync", enabled).apply() }
+    fun cachedAnime(context: Context): Map<String, Anime> = runCatching {
+        DeviceSyncMapping.animeMetadata(JSONObject(prefs(context).getString(KEY_DATA, "{}") ?: "{}"))
+    }.getOrElse { emptyMap() }
+
     fun libraryAdded(context: Context, id: String) {
         val p = prefs(context)
         val added = runCatching { JSONObject(p.getString(KEY_ADDED, "{}") ?: "{}") }.getOrElse { JSONObject() }
@@ -183,7 +190,7 @@ object DeviceSyncClient {
             val json = try { JSONObject(text) } catch (_: Exception) {
                 throw IllegalStateException(if (code in 300..399 || text.contains("Vercel", true)) "Vercel 보호 페이지입니다. Domains의 고정 주소와 Deployment Protection 설정을 확인하세요." else "서버가 JSON 응답을 반환하지 않았습니다. (HTTP $code)")
             }
-            if (code !in 200..299) throw IllegalStateException(json.optString("error").ifBlank { "서버 요청 실패 (HTTP $code)" })
+            if (code !in 200..299) throw RequestException(code, json.optString("error").ifBlank { "서버 요청 실패 (HTTP $code)" })
             return json
         } finally { conn.disconnect() }
     }

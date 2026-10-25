@@ -72,12 +72,28 @@ object OfflineDownloadManager {
 
     fun resumePending(context: Context) {
         val pending = MpvOfflineStore.listStatuses(context.applicationContext)
-            .any { it.state == "queued" || it.state == "downloading" || it.state == "paused" }
+            .any { DownloadQueuePolicy.shouldRecover(it.state) }
         if (!pending) return
         ContextCompat.startForegroundService(
             context.applicationContext,
             Intent(context.applicationContext, LilacDownloadService::class.java)
         )
+    }
+
+    fun pause(context: Context, animeId: String, episodeId: String) = command(context, LilacDownloadService.ACTION_PAUSE, animeId, episodeId)
+    fun resume(context: Context, animeId: String, episodeId: String) = command(context, LilacDownloadService.ACTION_RESUME, animeId, episodeId)
+    fun resumeAll(context: Context, failuresOnly: Boolean = false) {
+        MpvOfflineStore.listStatuses(context).filter {
+            DownloadQueuePolicy.canResume(it.state, it.sourceUrl) && (!failuresOnly || it.state == "failed")
+        }.forEach { resume(context, it.animeId, it.episodeId) }
+    }
+    private fun command(context: Context, action: String, animeId: String, episodeId: String) {
+        val app = context.applicationContext
+        ContextCompat.startForegroundService(app, Intent(app, LilacDownloadService::class.java).apply {
+            this.action = action
+            putExtra(LilacDownloadService.EXTRA_ANIME_ID, animeId)
+            putExtra(LilacDownloadService.EXTRA_EPISODE_ID, episodeId)
+        })
     }
 
     fun remove(context: Context, animeId: String, episodeId: String) {

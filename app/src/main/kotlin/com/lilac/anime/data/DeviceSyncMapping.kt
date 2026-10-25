@@ -12,7 +12,7 @@ internal object DeviceSyncMapping {
     val collections = listOf("library", "history")
     fun wireAnimeId(id: String): String = if (':' in id) id else "linkani:$id"
     fun androidAnimeId(id: String): String? = when {
-        id.startsWith("reanime:") -> id
+        id.substringBefore(':') in setOf("reanime", "miruro", "animenosub", "ohli24") -> id
         id.startsWith("linkani:") -> id.removePrefix("linkani:")
         else -> null // Keep unsupported PC providers in the wire cache, not in the Android UI.
     }
@@ -30,14 +30,21 @@ internal object DeviceSyncMapping {
     fun episodeLabel(w: WatchProgress): String = w.episodeKey.substringAfterLast("_ep_")
         .takeIf { Regex("\\d+[a-zA-Z]*").matches(it) } ?: w.episodeNumber.toString()
 
+    private fun component(value: String): String = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+        .replace("%21", "!").replace("%27", "'").replace("%28", "(").replace("%29", ")").replace("%7E", "~")
     fun historyId(w: WatchProgress, anime: Anime? = null): String {
-        val provider = wireAnimeId(w.animeId).substringBefore(':')
+        val wire = wireAnimeId(w.animeId)
+        val provider = wire.substringBefore(':'); val raw = wire.substringAfter(':')
         val label = episodeLabel(w)
         val episode = anime?.episodes?.firstOrNull { it.id == w.episodeKey || it.displayNumber.equals(label, true) }
-        val url = if (provider == "reanime") {
-            "https://reanime.to/watch/${w.animeId.removePrefix("reanime:")}?ep=${w.episodeNumber}"
-        } else episode?.videoUrl?.takeIf { it.startsWith("https://linkani.tv/watch/") }
-            ?: "https://linkani.tv/watch/${w.animeId}/a1/k$label/"
+        val sourceUrl = episode?.videoUrl?.takeIf { it.startsWith("https://") && !it.contains(".m3u8", true) && !it.contains(".mp4", true) }
+        val url = sourceUrl ?: when (provider) {
+            "reanime" -> "https://reanime.to/watch/${component(raw)}?ep=${w.episodeNumber}"
+            "miruro" -> "https://www.miruro.to/watch/${component(raw)}?ep=${w.episodeNumber}"
+            "animenosub" -> "https://animenosub.to/$raw-episode-$label${if ("_dub_ep_" in w.episodeKey) "-dub" else ""}/"
+            "ohli24" -> "https://ani.ohli24.com/e/${component(w.episodeKey.removePrefix(w.animeId + ":"))}"
+            else -> "https://linkani.tv/watch/$raw/a1/k$label/"
+        }
         return fitId("$provider:$url")
     }
     private fun animeData(id: String, anime: Anime?, previous: JSONObject?): JSONObject {
@@ -57,7 +64,17 @@ internal object DeviceSyncMapping {
                 webp.put("large_image_url", anime.poster); images.put("webp", webp); out.put("images", images)
             }
         } else if (out.optString("title").isBlank()) out.put("title", id)
-        if (!out.has("url")) out.put("url", if (provider == "reanime") "https://reanime.to/anime/${wireId.substringAfter(':')}" else "https://linkani.tv/ani/$id/")
+        if (!anime?.detailUrl.isNullOrBlank()) out.put("url", anime!!.detailUrl)
+        if (!out.has("url")) {
+            val raw = component(wireId.substringAfter(':'))
+            out.put("url", when (provider) {
+                "reanime" -> "https://reanime.to/anime/$raw"
+                "miruro" -> "https://www.miruro.to/watch/$raw"
+                "animenosub" -> "https://animenosub.to/anime/$raw/"
+                "ohli24" -> "https://ani.ohli24.com/c/$raw"
+                else -> "https://linkani.tv/ani/$raw/"
+            })
+        }
         return out
     }
     fun local(library: Set<String>, history: List<WatchProgress>, metadata: Map<String, Anime>, previous: JSONObject, addedAt: Map<String, Long> = emptyMap()): JSONObject {
@@ -81,8 +98,11 @@ internal object DeviceSyncMapping {
             data.put("key", key).put("androidAnimeId", w.animeId).put("androidEpisodeKey", w.episodeKey)
                 .put("name", "${metadata[w.animeId]?.title ?: data.optJSONObject("anime")?.optString("title") ?: w.animeId} · ${episodeLabel(w)}화")
                 .put("anime", animeData(w.animeId, metadata[w.animeId], data.optJSONObject("anime")))
-                .put("progress", w.progress.toDouble())
-            if (w.updated > 0) data.put("updated", w.updated) else if (!data.has("updated")) data.put("updated", 1L)
+                .put("progress", PlaybackHistory.percent(w.progress)).put("progressUnit", "percent")
+            val oldData = old.optJSONObject(key)
+            val legacy = oldData?.has("androidAnimeId") == true && !oldData.has("progressUnit")
+            val changedAt = maxOf(w.updated.coerceAtLeast(1L), if (legacy) oldData!!.optLong("updated", 1L) + 1L else 1L)
+            data.put("updated", changedAt)
             if (!data.has("episode")) data.put("episode", JSONObject().put("number", w.episodeNumber).put("name", episodeLabel(w))
                 .put("provider", wireAnimeId(w.animeId).substringBefore(':')).put("url", key.substringAfter(':')))
             hist.put(key, data)
@@ -111,9 +131,14 @@ internal object DeviceSyncMapping {
         val number = episode.optInt("number", data.optInt("episodeNumber", 1)).coerceAtLeast(1)
         val label = episode.optString("name").takeIf { Regex("\\d+[a-zA-Z]*").matches(it) } ?: number.toString()
         val key = data.optString("androidEpisodeKey").ifBlank {
-            if (animeId.startsWith("reanime:")) "$animeId:ep-$number" else "${animeId}_ep_$label"
+            when {
+                animeId.startsWith("reanime:") -> "$animeId:ep-$number"
+                animeId.startsWith("miruro:") -> "$animeId:$number"
+                animeId.startsWith("ohli24:") -> "$animeId:" + runCatching { URLDecoder.decode(episode.optString("url").substringAfter("/e/").substringBefore('?').trimEnd('/').replace("+", "%2B"), "UTF-8") }.getOrDefault(number.toString())
+                else -> "${animeId}_${if (episode.optBoolean("dub")) "dub_" else ""}ep_$label"
+            }
         }
-        return WatchProgress(animeId, number, data.optDouble("progress", 0.0).toFloat().takeIf { it.isFinite() }?.coerceIn(0f, 100f) ?: 0f,
+        return WatchProgress(animeId, number, PlaybackHistory.fromWire(data.optDouble("progress", 0.0), data.has("androidAnimeId") && !data.has("progressUnit")),
             key, data.optLong("updated", 1L))
     }
     fun history(local: JSONObject): List<WatchProgress> {
@@ -122,6 +147,22 @@ internal object DeviceSyncMapping {
             .sortedByDescending { it.updated }.distinctBy { "${it.animeId}|${it.episodeKey}" }.take(300).toList()
     }
     fun library(local: JSONObject): Set<String> = local.optJSONObject("library")?.keys()?.asSequence()?.mapNotNull(::androidAnimeId)?.toSet() ?: emptySet()
+    fun animeMetadata(local: JSONObject): Map<String, Anime> {
+        val result = linkedMapOf<String, Anime>()
+        fun add(data: JSONObject) {
+            val wire = data.optString("mal_id").ifBlank { "${data.optString("provider")}:${data.optString("id")}" }
+            val id = androidAnimeId(wire) ?: return
+            val poster = data.optJSONObject("images")?.optJSONObject("webp")?.optString("large_image_url").orEmpty()
+            result[id] = Anime(id = id, title = data.optString("title", id), poster = poster,
+                backdrop = poster, description = data.optString("synopsis"), year = data.optString("year"),
+                english = data.optString("title_english"), native = data.optString("title_japanese"),
+                source = if (wire.startsWith("linkani:")) "linkkf" else wire.substringBefore(':'), detailUrl = data.optString("url"))
+        }
+        local.optJSONObject("history")?.let { obj -> obj.keys().forEach { id -> obj.optJSONObject(id)?.optJSONObject("anime")?.let(::add) } }
+        local.optJSONObject("library")?.let { obj -> obj.keys().forEach { id -> obj.optJSONObject(id)?.let(::add) } }
+        return result
+    }
+
     private fun stable(value: Any?): String = when (value) {
         is JSONObject -> value.keys().asSequence().sorted()
             .joinToString(",", "{", "}") { JSONObject.quote(it) + ":" + stable(value.opt(it)) }

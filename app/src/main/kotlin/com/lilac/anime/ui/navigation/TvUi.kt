@@ -766,6 +766,7 @@ fun TvSettingsScreen(vm: AnimeViewModel, themeMode: ThemeMode, onThemeChange: (T
     TvShell("settings", onNavigate) {
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 110.dp), contentPadding = PaddingValues(vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item { Text("설정", color = TvText, fontSize = 36.sp, fontWeight = FontWeight.Black) }
+            item { TvSettingSection("다운로드") { TvChoice("다운로드 관리", false) { onNavigate("downloads") } } }
             item { TvSettingSection("영상 소스") { listOf("linkkf" to "Linkkf", "animenosub" to "Animenosub", "reanime" to "RE:Anime", "miruro" to "Miruro", "ohli24" to "애니24").forEach { (value, label) -> TvChoice(label, vm.playerSettings.videoSourcePreference == value) { vm.updatePlayerSettings(context, vm.playerSettings.copy(videoSourcePreference = value)) } } } }
             item { TvSettingSection("기본 화질") { listOf("Auto", "720p", "1080p").forEach { TvChoice(it, vm.playerSettings.defaultQuality == it) { vm.updatePlayerSettings(context, vm.playerSettings.copy(defaultQuality = it)) } } } }
             item { TvSettingSection("테마") { listOf(ThemeMode.SYSTEM to "시스템", ThemeMode.DARK to "다크", ThemeMode.LIGHT to "라이트").forEach { (m, label) -> TvChoice(label, themeMode == m) { onThemeChange(m) } } } }
