@@ -24,7 +24,7 @@ class DeviceSyncMappingTest {
         assertEquals(12345L, second.getJSONObject("history").getJSONObject(id).getLong("updated"))
     }
     @Test fun importedPcMetadataAndExactEpisodeKeySurviveRoundtrip() {
-        val pc = JSONObject("""{"library":{"linkani:12":{"provider":"linkani","mal_id":"linkani:12","id":"12","title":"제목","score":9,"savedAt":123}},"history":{"linkani:https://linkani.tv/watch/12/k4a/":{"key":"linkani:https://linkani.tv/watch/12/k4a/","anime":{"provider":"linkani","id":"12","mal_id":"linkani:12","title":"제목"},"episode":{"number":4,"name":"4a","url":"https://linkani.tv/watch/12/k4a/","provider":"linkani"},"progress":50,"updated":456}}}""")
+        val pc = JSONObject("""{"library":{"linkani:12":{"provider":"linkani","mal_id":"linkani:12","id":"12","title":"제목","score":9,"savedAt":123}},"history":{"linkani:https://linkani.tv/watch/12/a1/k4a/":{"key":"linkani:https://linkani.tv/watch/12/a1/k4a/","anime":{"provider":"linkani","id":"12","mal_id":"linkani:12","title":"제목"},"episode":{"number":4,"name":"4a","url":"https://linkani.tv/watch/12/a1/k4a/","provider":"linkani"},"progress":50,"updated":456}}}""")
         val history = DeviceSyncMapping.history(pc)
         assertEquals("12_ep_4a", history.single().episodeKey)
         val roundtrip = DeviceSyncMapping.local(DeviceSyncMapping.library(pc), history, emptyMap(), pc)
@@ -56,6 +56,10 @@ class DeviceSyncMappingTest {
         assertEquals(200L, data.getLong("savedAt"))
         assertEquals("Title", data.getString("title_english"))
         assertEquals("poster", data.getJSONObject("images").getJSONObject("webp").getString("large_image_url"))
+    }
+    @Test fun linkaniFallbackIncludesTheSourceVersionSegment() {
+        assertEquals("linkani:https://linkani.tv/watch/123/a1/k4a/",
+            DeviceSyncMapping.historyId(WatchProgress("123", 4, 20f, "123_ep_4a")))
     }
     @Test fun tombstonesRemoveTheExactWireKey() {
         val local = DeviceSyncMapping.local(setOf("123"), emptyList(), emptyMap(), JSONObject())

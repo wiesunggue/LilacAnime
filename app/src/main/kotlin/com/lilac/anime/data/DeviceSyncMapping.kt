@@ -37,7 +37,7 @@ internal object DeviceSyncMapping {
         val url = if (provider == "reanime") {
             "https://reanime.to/watch/${w.animeId.removePrefix("reanime:")}?ep=${w.episodeNumber}"
         } else episode?.videoUrl?.takeIf { it.startsWith("https://linkani.tv/watch/") }
-            ?: "https://linkani.tv/watch/${w.animeId}/k$label/"
+            ?: "https://linkani.tv/watch/${w.animeId}/a1/k$label/"
         return fitId("$provider:$url")
     }
     private fun animeData(id: String, anime: Anime?, previous: JSONObject?): JSONObject {

@@ -174,9 +174,24 @@ jobs:
         shell: bash
         run: gradle :app:testDebugUnitTest --stacktrace --no-daemon
 
+      - name: Upload regression test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-sync-markup-test-reports
+          path: app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build debug APK
         shell: bash
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK signature and package metadata
+        shell: bash
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | head -8
 
       - name: Collect APK
         shell: bash
