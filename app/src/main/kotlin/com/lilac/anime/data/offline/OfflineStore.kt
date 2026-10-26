@@ -314,7 +314,7 @@ object OfflineStore {
             }
             array.put(json)
         }
-        prefs.edit().putString("saved_watch_history", array.toString()).apply()
+        check(prefs.edit().putString("saved_watch_history", array.toString()).commit()) { "시청 기록을 저장하지 못했습니다." }
     }
 
     suspend fun getWatchHistory(context: Context): List<WatchProgress> = withContext(Dispatchers.IO) {
@@ -350,7 +350,7 @@ object OfflineStore {
     private fun writeLibrary(context: Context, library: Set<String>) {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val jsonArray = JSONArray(library.toList())
-        prefs.edit().putString("saved_library", jsonArray.toString()).apply()
+        check(prefs.edit().putString("saved_library", jsonArray.toString()).commit()) { "내 목록을 저장하지 못했습니다." }
     }
 
     suspend fun getLibrary(context: Context): Set<String> = withContext(Dispatchers.IO) {
