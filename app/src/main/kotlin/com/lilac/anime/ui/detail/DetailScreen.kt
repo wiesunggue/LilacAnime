@@ -285,6 +285,7 @@ private fun DetailInfoContent(anime: Anime) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DetailScreen(
     vm: AnimeViewModel,
@@ -1120,7 +1121,7 @@ fun DetailScreen(
 
                     Spacer(Modifier.height(18.dp))
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             enabled = lastPlayedEpisode != null && (!isOffline || vm.isEpisodeDownloaded(currentAnime.id, lastPlayedEpisode)),
                             onClick = {

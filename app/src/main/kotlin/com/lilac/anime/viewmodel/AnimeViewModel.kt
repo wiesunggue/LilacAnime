@@ -994,8 +994,11 @@ class AnimeViewModel : ViewModel() {
             anime = detail; candidates = loaded
         }
         check(candidates.isNotEmpty()) { if (_isOffline.value) "저장된 회차가 없습니다. 인터넷 연결 후 다시 시도하세요." else "재생할 회차를 찾지 못했습니다." }
-        val ordered = PlaybackHistory.orderedEpisodes(candidates, key)
+        val available = PlaybackHistory.availableEpisodes(candidates, _isOffline.value) { isEpisodeDownloaded(animeId, it) }
+        check(available.isNotEmpty()) { if (_isOffline.value) "재생 가능한 다운로드가 없습니다." else "재생 가능한 회차가 없습니다." }
+        val ordered = PlaybackHistory.orderedEpisodes(available, key)
         val episode = PlaybackHistory.selectEpisode(ordered, latest, requestedKey)
+            ?: (if (_isOffline.value && requestedKey == null) ordered.firstOrNull() else null)
             ?: throw IllegalStateException("해당 회차를 찾지 못했습니다. 작품의 회차 목록을 새로고침하세요.")
         anime = anime.copy(episodes = ordered)
         animeCache[animeId] = anime; detailCache[animeId] = anime; episodeCache[animeId] = ordered

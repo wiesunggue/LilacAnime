@@ -1852,7 +1852,7 @@ fun PlayerScreen(
         if (event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
         if (code == android.view.KeyEvent.KEYCODE_SPACE) { spaceController.down(); return true }
         // Let TV D-pad and focused controls retain their normal navigation/activation.
-        if (isTv && code in setOf(android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_DPAD_CENTER)) return false
+        if (isTv && code in setOf(android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT, android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER)) return false
         if (code == android.view.KeyEvent.KEYCODE_ENTER && controlsVisible) return false
         val recognized = code in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 || code in setOf(
             android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,

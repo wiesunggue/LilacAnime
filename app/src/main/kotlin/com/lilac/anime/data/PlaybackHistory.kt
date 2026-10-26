@@ -36,6 +36,9 @@ internal object PlaybackHistory {
         return (if (dubbed) sameVersion else sameVersion.ifEmpty { episodes }).distinctBy { it.id }
             .sortedWith(compareBy<Episode> { it.number }.thenBy { it.displayNumber })
     }
+    fun availableEpisodes(episodes: List<Episode>, offline: Boolean, downloaded: (Episode) -> Boolean): List<Episode> =
+        episodes.filter { it.playable && (!offline || downloaded(it)) }
+
     fun selectEpisode(episodes: List<Episode>, latest: WatchProgress?, requestedKey: String?): Episode? {
         val key = requestedKey ?: latest?.episodeKey
         val ordered = orderedEpisodes(episodes, key)

@@ -47,6 +47,12 @@ class PlaybackHistoryTest {
         assertEquals("x_dub_ep_2", PlaybackHistory.selectEpisode(episodes, latest, null)?.id)
         assertEquals(listOf("x_dub_ep_1", "x_dub_ep_2"), PlaybackHistory.orderedEpisodes(episodes, latest.episodeKey).map { it.id })
     }
+    @Test fun offlineResumeOnlyOffersDownloadedPlayableEpisodes() {
+        val episodes = listOf(Episode("1",1,"1"), Episode("2",2,"2"), Episode("3",3,"방영 예정",playable=false))
+        assertEquals(listOf("2"), PlaybackHistory.availableEpisodes(episodes, true) { it.id != "1" }.map { it.id })
+        assertEquals(listOf("1","2"), PlaybackHistory.availableEpisodes(episodes, false) { false }.map { it.id })
+        assertTrue(PlaybackHistory.availableEpisodes(episodes, true) { false }.isEmpty())
+    }
     @Test fun openingSyncedAnimeUsesItsSourceInsteadOfCurrentHomeSource() {
         assertEquals("reanime", PlaybackHistory.sourceFor(Anime(id="reanime:x"), "linkkf"))
         assertEquals("linkkf", PlaybackHistory.sourceFor(Anime(id="123"), "reanime"))
