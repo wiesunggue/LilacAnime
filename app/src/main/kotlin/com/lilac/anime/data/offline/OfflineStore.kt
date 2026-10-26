@@ -32,6 +32,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 object OfflineStore {
     private const val PREF_NAME = "lilac_offline_store"
+    private val collectionWrites = com.lilac.anime.core.concurrent.OrderedTaskQueue(
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO))
 
     // Full catalog TTL: avoid requesting hundreds of catalog pages on every app launch.
     const val ANIME_LIST_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
@@ -293,7 +295,13 @@ object OfflineStore {
         prefs.getBoolean("episode_sort_newest_$animeId", false)
     }
 
-    suspend fun saveWatchHistory(context: Context, history: List<WatchProgress>) = withContext(Dispatchers.IO) {
+    fun enqueueWatchHistory(context: Context, history: List<WatchProgress>): kotlinx.coroutines.Deferred<Unit> {
+        val app = context.applicationContext
+        val snapshot = history.toList()
+        return collectionWrites.submit { writeWatchHistory(app, snapshot) }
+    }
+    suspend fun saveWatchHistory(context: Context, history: List<WatchProgress>) { enqueueWatchHistory(context, history).await() }
+    private fun writeWatchHistory(context: Context, history: List<WatchProgress>) {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val array = JSONArray()
         history.forEach { item ->
@@ -333,7 +341,13 @@ object OfflineStore {
         }
     }
 
-    suspend fun saveLibrary(context: Context, library: Set<String>) = withContext(Dispatchers.IO) {
+    fun enqueueLibrary(context: Context, library: Set<String>): kotlinx.coroutines.Deferred<Unit> {
+        val app = context.applicationContext
+        val snapshot = library.toSet()
+        return collectionWrites.submit { writeLibrary(app, snapshot) }
+    }
+    suspend fun saveLibrary(context: Context, library: Set<String>) { enqueueLibrary(context, library).await() }
+    private fun writeLibrary(context: Context, library: Set<String>) {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val jsonArray = JSONArray(library.toList())
         prefs.edit().putString("saved_library", jsonArray.toString()).apply()

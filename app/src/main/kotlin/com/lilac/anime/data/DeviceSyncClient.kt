@@ -155,6 +155,7 @@ object DeviceSyncClient {
         // The snapshot describes the acknowledged state, not edits made during
         // the network request. Those edits stay pending for the next sync.
         val acknowledged = DeviceSyncMapping.local(remoteLibrary, remoteHistory, metadata, remote, addedAt)
+        var persisted: List<kotlinx.coroutines.Deferred<Unit>> = emptyList()
         val finalState = withContext(Dispatchers.Main) {
             val (freshLibrary, freshHistory) = readFresh()
             val finalLibrary = (remoteLibrary + (freshLibrary - library)) - (library - freshLibrary)
@@ -169,10 +170,11 @@ object DeviceSyncClient {
             }
             val finalHistory = combined.values.sortedByDescending { it.updated }.take(300)
             apply(finalLibrary, finalHistory)
+            // Enqueue while still on Main, before a later user edit can be queued.
+            persisted = listOf(OfflineStore.enqueueLibrary(context, finalLibrary), OfflineStore.enqueueWatchHistory(context, finalHistory))
             finalLibrary to finalHistory
         }
-        OfflineStore.saveLibrary(context, finalState.first)
-        OfflineStore.saveWatchHistory(context, finalState.second)
+        persisted.forEach { it.await() }
         p.edit().putInt(KEY_SCHEMA, 3).putLong(KEY_REV, rev)
             .putString(KEY_DATA, remote.toString()).putString(KEY_SNAPSHOT, DeviceSyncMapping.hashes(acknowledged).toString()).apply()
         SyncResult(finalState.first, finalState.second, sent, received, rev)

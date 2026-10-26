@@ -41,7 +41,7 @@ internal object PlaybackHistory {
 
     fun selectEpisode(episodes: List<Episode>, latest: WatchProgress?, requestedKey: String?): Episode? {
         val key = requestedKey ?: latest?.episodeKey
-        val ordered = orderedEpisodes(episodes, key)
+        val ordered = orderedEpisodes(episodes, key).filter { it.playable }
         val label = key?.let {
             if ("_ep_" in it || ":ep-" in it || Regex("\\d+[a-zA-Z]*").matches(it)) episodeLabel(it, latest?.episodeNumber ?: 0)
             else if (requestedKey == null && latest != null) episodeLabel(it, latest.episodeNumber) else null
@@ -53,8 +53,14 @@ internal object PlaybackHistory {
         return if (requestedKey == null && latest != null && fraction(latest.progress) >= .95f)
             ordered.getOrNull(ordered.indexOf(matched) + 1) ?: matched else matched
     }
+    fun sameEpisode(key: String, number: Int, otherKey: String, otherNumber: Int, label: String? = null, otherLabel: String? = null): Boolean {
+        if (number != otherNumber) return false
+        if (key.equals(otherKey, true)) return true
+        if (key.contains("_dub_ep_", true) != otherKey.contains("_dub_ep_", true)) return false
+        return episodeLabel(label?.takeIf { it.isNotBlank() } ?: key, number) ==
+            episodeLabel(otherLabel?.takeIf { it.isNotBlank() } ?: otherKey, otherNumber)
+    }
     fun find(history: List<WatchProgress>, animeId: String, key: String, number: Int): WatchProgress? =
         history.firstOrNull { it.animeId == animeId && it.episodeKey.equals(key, true) }
-            ?: history.firstOrNull { it.animeId == animeId && it.episodeNumber == number &&
-                episodeLabel(it.episodeKey, it.episodeNumber) == episodeLabel(key, number) }
+            ?: history.firstOrNull { it.animeId == animeId && sameEpisode(key, number, it.episodeKey, it.episodeNumber) }
 }

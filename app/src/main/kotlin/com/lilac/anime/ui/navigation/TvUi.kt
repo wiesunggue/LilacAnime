@@ -646,10 +646,14 @@ fun TvDetailScreen(vm: AnimeViewModel, anime: Anime, back: () -> Unit, playEpiso
         vm.loadEpisodes(context, detail, force = false)
     }
     LaunchedEffect(detail.id, vm.playerSettings.videoSourcePreference) {
-        if (vm.playerSettings.videoSourcePreference == "linkkf") {
+        if (com.lilac.anime.data.PlaybackHistory.sourceFor(detail, vm.playerSettings.videoSourcePreference) == "linkkf") {
             vm.loadLinkkfDetailExtras(detail, force = true)
         }
     }
+    val offline by vm.isOffline.collectAsState()
+    val available = com.lilac.anime.data.PlaybackHistory.availableEpisodes(vm.episodes(detail), offline) { vm.isEpisodeDownloaded(detail.id, it) }
+    val latest = vm.getLatestProgress(detail.id)
+    val resumeEpisode = com.lilac.anime.data.PlaybackHistory.selectEpisode(available, latest, null) ?: available.firstOrNull()
     BackHandlerTv(back)
     LazyColumn(Modifier.fillMaxSize().background(TvBg), contentPadding = PaddingValues(bottom = 60.dp)) {
         item {
@@ -664,8 +668,7 @@ fun TvDetailScreen(vm: AnimeViewModel, anime: Anime, back: () -> Unit, playEpiso
                     Text(detail.description, color = TvText.copy(alpha = .86f), fontSize = 16.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        val first = vm.episodes(detail).firstOrNull()
-                        Button(onClick = { first?.let(playEpisode) }) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("재생") }
+                        Button(enabled = resumeEpisode != null, onClick = { resumeEpisode?.let(playEpisode) }) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text(if (latest == null) "첫 화 재생" else "이어보기") }
                         OutlinedButton(onClick = { vm.toggleLibrary(context, detail.id) }) {
                             Icon(
                                 if (vm.isInLibrary(detail.id)) Icons.Default.Favorite else Icons.Default.FavoriteBorder,

@@ -40,6 +40,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.joinAll
+import com.lilac.anime.core.concurrent.OrderedTaskQueue
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -52,6 +54,7 @@ import kotlinx.coroutines.sync.withPermit
 class LilacDownloadService : Service() {
     private val serviceJob = SupervisorJob()
     private val scope = CoroutineScope(serviceJob + Dispatchers.IO)
+    private val commands = OrderedTaskQueue(scope)
     private val jobs = mutableMapOf<String, Job>()
     private val cancelledForRemoval = mutableSetOf<String>()
     private val pausedByUser = mutableSetOf<String>()
@@ -60,6 +63,7 @@ class LilacDownloadService : Service() {
     private var foregroundStarted = false
     private var recoveryStarted = false
     private var pendingCommands = 0
+    private var latestStartId = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -67,6 +71,8 @@ class LilacDownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        synchronized(lock) { pendingCommands++; latestStartId = startId }
+        try {
         ensureForeground()
         if (!recoveryStarted) {
             recoveryStarted = true
@@ -79,6 +85,10 @@ class LilacDownloadService : Service() {
             ACTION_PAUSE -> pauseDownload(intent)
             ACTION_RESUME -> resumeDownload(intent)
             ACTION_CANCEL_ALL -> cancelAll()
+        }
+        } finally {
+            synchronized(lock) { pendingCommands-- }
+            maybeStopService()
         }
         return START_STICKY
     }
@@ -120,7 +130,7 @@ class LilacDownloadService : Service() {
 
     private fun launchCommand(action: suspend () -> Unit) {
         synchronized(lock) { pendingCommands++ }
-        scope.launch {
+        commands.submit {
             try { action() }
             catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) { android.util.Log.e("OfflineDownload", "QUEUE_COMMAND_FAILED", error) }
@@ -132,10 +142,15 @@ class LilacDownloadService : Service() {
     }
 
     private fun enqueue(intent: Intent, recovering: Boolean = false) {
-        if (!recovering) synchronized(lock) {
-            pausedByUser.remove("${intent.getStringExtra(EXTRA_ANIME_ID)}::${intent.getStringExtra(EXTRA_EPISODE_ID)}")
+        launchCommand {
+            val key = "${intent.getStringExtra(EXTRA_ANIME_ID)}::${intent.getStringExtra(EXTRA_EPISODE_ID)}"
+            val previous = synchronized(lock) { jobs[key] }
+            // A cancelled job can still be closing an HTTP/muxing operation.
+            // Never let it write into a newly resumed/replaced download's files.
+            if (previous != null && !previous.isActive) previous.join()
+            if (!recovering) synchronized(lock) { pausedByUser.remove(key) }
+            enqueueInternal(intent, recovering)
         }
-        launchCommand { enqueueInternal(intent, recovering) }
     }
 
     private suspend fun enqueueInternal(intent: Intent, recovering: Boolean = false) {
@@ -257,29 +272,28 @@ class LilacDownloadService : Service() {
                 }
                 }
             } catch (cancel: CancellationException) {
-                val removed = synchronized(lock) { cancelledForRemoval.contains(key) }
-                if (!removed) {
-                    val current = MpvOfflineStore.findStatus(applicationContext, key)
-                    MpvOfflineStore.saveStatus(
-                        applicationContext,
-                        (current ?: MpvOfflineStore.Status(key, existingProgress, STATE_PAUSED, title, episodeId))
-                            .copy(state = if (synchronized(lock) { key in pausedByUser }) STATE_PAUSED else STATE_QUEUED)
-                    )
+                synchronized(lock) {
+                    if (key !in cancelledForRemoval) {
+                        val current = MpvOfflineStore.findStatus(applicationContext, key)
+                        MpvOfflineStore.saveStatus(applicationContext,
+                            (current ?: MpvOfflineStore.Status(key, existingProgress, STATE_PAUSED, title, episodeId))
+                                .copy(state = if (key in pausedByUser) STATE_PAUSED else STATE_QUEUED))
+                    }
                 }
                 throw cancel
-            } catch (t: Throwable) {
-                if (synchronized(lock) { key in pausedByUser || key in cancelledForRemoval }) return@launch
-                val current = MpvOfflineStore.findStatus(applicationContext, key)
-                MpvOfflineStore.saveStatus(
-                    applicationContext,
-                    (current ?: MpvOfflineStore.Status(key, existingProgress, STATE_FAILED, title, episodeId))
-                        .copy(state = STATE_FAILED, error = t.message)
-                )
+            } catch (failure: Exception) {
+                synchronized(lock) {
+                    if (key !in pausedByUser && key !in cancelledForRemoval) {
+                        val current = MpvOfflineStore.findStatus(applicationContext, key)
+                        MpvOfflineStore.saveStatus(applicationContext,
+                            (current ?: MpvOfflineStore.Status(key, existingProgress, STATE_FAILED, title, episodeId))
+                                .copy(state = STATE_FAILED, error = failure.message))
+                    }
+                }
             } finally {
                 val finished = currentCoroutineContext()[Job]
                 synchronized(lock) {
                     if (jobs[key] === finished) jobs.remove(key)
-                    cancelledForRemoval.remove(key)
                 }
                 publishSummary()
                 maybeStopService()
@@ -618,7 +632,7 @@ class LilacDownloadService : Service() {
         val key = "$animeId::$episodeId"
         launchCommand {
             val oldJob = synchronized(lock) { jobs[key] }
-            if (synchronized(lock) { key in pausedByUser }) oldJob?.cancelAndJoin()
+            if (synchronized(lock) { key in pausedByUser } || oldJob?.isActive == false) oldJob?.cancelAndJoin()
             val status = MpvOfflineStore.findStatus(applicationContext, key) ?: return@launchCommand
             if (!DownloadQueuePolicy.canResume(status.state, status.sourceUrl)) { maybeStopService(); return@launchCommand }
             synchronized(lock) { pausedByUser.remove(key); cancelledForRemoval.remove(key) }
@@ -638,51 +652,42 @@ class LilacDownloadService : Service() {
         val animeId = intent.getStringExtra(EXTRA_ANIME_ID) ?: return
         val episodeId = intent.getStringExtra(EXTRA_EPISODE_ID) ?: return
         val key = "$animeId::$episodeId"
-
-        // Mark the job as cancelled before touching the coroutine. The progress
-        // tracker runs independently and can otherwise observe the old
-        // downloading/queued state for one more tick, making the UI appear to
-        // require a second tap. CANCELLED is also intentionally not recovered
-        // when the service restarts.
-        // Block all late progress/state writes before changing the persisted state.
-        // This closes the small race where the first cancel tap was followed by a
-        // downloader callback that wrote DOWNLOADING again.
-        synchronized(lock) {
-            cancelledForRemoval += key
-            jobs.remove(key)?.cancel()
+        launchCommand {
+            val previous = synchronized(lock) {
+                cancelledForRemoval += key
+                jobs[key]?.also { it.cancel() }
+            }
+            try {
+                previous?.join()
+                // The downloader and all its final callbacks have now stopped.
+                MpvOfflineStore.delete(applicationContext, animeId, episodeId)
+            } finally {
+                synchronized(lock) { cancelledForRemoval.remove(key); pausedByUser.remove(key) }
+            }
         }
-
-        val old = MpvOfflineStore.findStatus(applicationContext, key)
-        if (old != null) {
-            MpvOfflineStore.saveStatus(
-                applicationContext,
-                old.copy(state = STATE_CANCELLED, error = null)
-            )
-        }
-
-        MpvOfflineStore.delete(applicationContext, animeId, episodeId)
-        publishSummary()
-        maybeStopService()
     }
 
     private fun cancelAll() {
-        synchronized(lock) {
-            MpvOfflineStore.listStatuses(applicationContext).filter { DownloadQueuePolicy.canPause(it.state) }.forEach {
-                pausedByUser += it.id
-                MpvOfflineStore.saveStatus(applicationContext, it.copy(state = STATE_PAUSED))
+        launchCommand {
+            val active = synchronized(lock) {
+                MpvOfflineStore.listStatuses(applicationContext).filter { DownloadQueuePolicy.canPause(it.state) }.forEach {
+                    pausedByUser += it.id
+                    MpvOfflineStore.saveStatus(applicationContext, it.copy(state = STATE_PAUSED, error = null))
+                }
+                jobs.values.toList().also { list -> list.forEach { it.cancel() } }
             }
-            jobs.values.toList().forEach { it.cancel() }
+            active.joinAll()
         }
-        maybeStopService(force = true)
     }
 
-    private fun maybeStopService(force: Boolean = false) {
-        val active = synchronized(lock) { jobs.values.any { it.isActive } || pendingCommands > 0 }
-        if (force || !active) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            if (force || MpvOfflineStore.listStatuses(applicationContext).none {
-                    it.state == STATE_DOWNLOADING || it.state == STATE_QUEUED
-                }) stopSelf()
+    private fun maybeStopService() {
+        synchronized(lock) {
+            if (jobs.values.any { it.isActive } || pendingCommands > 0) return
+            if (MpvOfflineStore.listStatuses(applicationContext).any { DownloadQueuePolicy.shouldRecover(it.state) }) return
+            if (stopSelfResult(latestStartId)) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                foregroundStarted = false
+            }
         }
     }
 
@@ -730,6 +735,7 @@ class LilacDownloadService : Service() {
                 MpvOfflineStore.saveStatus(applicationContext, status.copy(state = STATE_QUEUED))
             }
         synchronized(lock) { jobs.values.toList().forEach { it.cancel() }; jobs.clear() }
+        commands.close()
         scope.cancel()
         super.onDestroy()
     }

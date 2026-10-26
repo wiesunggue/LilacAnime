@@ -450,27 +450,8 @@ class AnimeViewModel : ViewModel() {
             MpvOfflineStore.listStatuses(appContext).any { it.id == "${animeId}::${animeId}_ep_${episodeNumber}" && it.state == "completed" }
     }
 
-    fun isEpisodeDownloaded(animeId: String, episode: Episode): Boolean {
-        // Re:Anime can regenerate Episode.id when its catalog/detail payload is refreshed.
-        // Offline files are also indexed by episode number, so the UI must not depend on
-        // the current online Episode.id matching the id used when the download was saved.
-        val local = MpvOfflineStore.completedPathForEpisode(
-            appContext, animeId, episode.id, episode.number
-        ) != null
-        val statusMatch = MpvOfflineStore.listStatuses(appContext).any { status ->
-            status.state == "completed" &&
-                status.animeId == animeId &&
-                status.episodeNumber == episode.number &&
-                MpvOfflineStore.completedPathForEpisode(
-                    appContext, animeId, status.episodeId, status.episodeNumber
-                ) != null
-        }
-        return local || statusMatch ||
-            _downloadedIds.value.contains(offlineDownloadId(animeId, episode)) ||
-            _downloadedIds.value.contains(episode.id) ||
-            (episode.displayNumber == episode.number.toString() &&
-                _downloadedIds.value.contains("${animeId}_${episode.number}"))
-    }
+    fun isEpisodeDownloaded(animeId: String, episode: Episode): Boolean =
+        MpvOfflineStore.completedPathForEpisode(appContext, animeId, episode.id, episode.number, episode.displayNumber) != null
 
     fun searchReAnime(query: String, context: Context? = null) {
         if (playerSettings.videoSourcePreference != "reanime") return
@@ -1185,9 +1166,7 @@ class AnimeViewModel : ViewModel() {
         library = if (animeId in library) library - animeId else library + animeId
         syncController.request()
         val updated = library
-        viewModelScope.launch(Dispatchers.IO) {
-            OfflineStore.saveLibrary(context, updated)
-        }
+        OfflineStore.enqueueLibrary(context, updated)
     }
 
     fun removeFromLibrary(context: Context, ids: Set<String>) {
@@ -1195,7 +1174,7 @@ class AnimeViewModel : ViewModel() {
         library = library - ids
         syncController.request()
         val updated = library
-        viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveLibrary(context, updated) }
+        OfflineStore.enqueueLibrary(context, updated)
     }
 
     fun deleteEpisodeProgress(context: Context, animeId: String, episode: Episode) {
@@ -1203,7 +1182,7 @@ class AnimeViewModel : ViewModel() {
         watchHistory = watchHistory.filterNot { it === previous }
         syncController.request()
         val updated = watchHistory
-        viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveWatchHistory(context, updated) }
+        OfflineStore.enqueueWatchHistory(context, updated)
     }
 
     fun isInLibrary(animeId: String): Boolean {
@@ -1219,7 +1198,7 @@ class AnimeViewModel : ViewModel() {
         val newList = (listOf(updatedItem) + filtered).take(300)
         watchHistory = newList
         syncController.request()
-        viewModelScope.launch(Dispatchers.IO) { OfflineStore.saveWatchHistory(context, newList) }
+        OfflineStore.enqueueWatchHistory(context, newList)
     }
 
     fun getLatestProgress(animeId: String): WatchProgress? = watchHistory.firstOrNull { it.animeId == animeId }
@@ -1235,17 +1214,13 @@ class AnimeViewModel : ViewModel() {
         val newList = watchHistory.filterNot { it.animeId in animeIds }
         watchHistory = newList
         syncController.request()
-        viewModelScope.launch(Dispatchers.IO) {
-            OfflineStore.saveWatchHistory(context, newList)
-        }
+        OfflineStore.enqueueWatchHistory(context, newList)
     }
 
     fun clearWatchHistory(context: Context) {
         watchHistory = emptyList()
         syncController.request()
-        viewModelScope.launch(Dispatchers.IO) {
-            OfflineStore.saveWatchHistory(context, emptyList())
-        }
+        OfflineStore.enqueueWatchHistory(context, emptyList())
     }
     // 다운로드 취소 및 상태/파일 정리
     fun cancelDownload(context: Context, animeId: String, episodeNumber: Int) {

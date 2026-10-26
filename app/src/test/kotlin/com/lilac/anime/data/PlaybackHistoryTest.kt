@@ -70,4 +70,12 @@ class PlaybackHistoryTest {
         assertEquals("x_ep_3",PlaybackHistory.selectEpisode(episodes,WatchProgress("x",1,1f,"x_ep_1"),null)?.id)
         assertNull(PlaybackHistory.selectEpisode(episodes,null,"x_ep_2"))
     }
+
+    @Test fun offlineLookupMustMatchLabelAndAudioVersionWhenIdsRegenerate() {
+        assertFalse(PlaybackHistory.sameEpisode("new-id",4,"old-id",4,"4a","4"))
+        assertFalse(PlaybackHistory.sameEpisode("x_ep_4",4,"x_dub_ep_4",4,"4","4"))
+        assertTrue(PlaybackHistory.sameEpisode("new-id",4,"old-id",4,"4a","4a"))
+        assertTrue(PlaybackHistory.sameEpisode("x_dub_ep_4",4,"x_dub_ep_4",4))
+        assertFalse(PlaybackHistory.sameEpisode("new-id",4,"old-id",5))
+    }
 }

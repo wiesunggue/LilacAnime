@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import com.lilac.anime.data.PlaybackHistory
 import com.lilac.anime.Anime
 import com.lilac.anime.Episode
 import com.lilac.anime.ReAnimeRelated
@@ -310,6 +311,9 @@ private fun FacetDropDown(label: String, value: String, options: List<String>, m
     val episodes = vm.episodes(detail).sortedBy { it.number }
     val episodeLoading = vm.isEpisodesLoading(detail)
     val latest = vm.getLatestProgress(detail.id)
+    val offline by vm.isOffline.collectAsState()
+    val available = PlaybackHistory.availableEpisodes(episodes, offline) { vm.isEpisodeDownloaded(detail.id, it) }
+    val resumeEpisode = PlaybackHistory.selectEpisode(available, latest, null) ?: available.firstOrNull()
     val downloaded = vm.downloadedIds.collectAsState().value
     Scaffold(topBar = { TopAppBar(title = { Text("Re:ANIME") }, navigationIcon = { IconButton(back) { Icon(Icons.Default.ArrowBack, "뒤로") } }) }) { padding ->
         if ((loading || episodeLoading) && episodes.isEmpty()) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -317,7 +321,7 @@ private fun FacetDropDown(label: String, value: String, options: List<String>, m
             item { ReAnimeHero(detail, episodes.size) }
             item {
                 Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { (latest?.let { p -> episodes.firstOrNull { it.number == p.episodeNumber } } ?: episodes.firstOrNull())?.let(playEpisode) }, enabled = episodes.isNotEmpty(), modifier = Modifier.weight(1f)) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(5.dp)); Text(if (latest != null) "이어보기" else "첫 화 재생") }
+                    Button(onClick = { resumeEpisode?.let(playEpisode) }, enabled = resumeEpisode != null, modifier = Modifier.weight(1f)) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(5.dp)); Text(if (latest != null) "이어보기" else "첫 화 재생") }
                     OutlinedButton(onClick = { vm.toggleLibrary(context, detail.id) }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.BookmarkAdd, null); Spacer(Modifier.width(5.dp)); Text(if (vm.isInLibrary(detail.id)) "보관 중" else "보관") }
                 }
             }

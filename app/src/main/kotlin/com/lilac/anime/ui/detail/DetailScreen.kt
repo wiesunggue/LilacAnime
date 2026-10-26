@@ -363,10 +363,9 @@ fun DetailScreen(
     }
 
     val lastPlayedProgress = vm.getLatestProgress(currentAnime.id)
-    val lastPlayedEpisode = remember(episodes, lastPlayedProgress) {
-        PlaybackHistory.selectEpisode(episodes, lastPlayedProgress, null)
-            ?: PlaybackHistory.orderedEpisodes(episodes, lastPlayedProgress?.episodeKey).firstOrNull { it.playable }
-    }
+    val availableForResume = PlaybackHistory.availableEpisodes(episodes, isOffline) { vm.isEpisodeDownloaded(currentAnime.id, it) }
+    val lastPlayedEpisode = PlaybackHistory.selectEpisode(availableForResume, lastPlayedProgress, null)
+        ?: PlaybackHistory.orderedEpisodes(availableForResume, lastPlayedProgress?.episodeKey).firstOrNull()
     val filteredEpisodes = remember(episodes, episodeQuery, newestFirst) {
         CollectionQuery.episodes(episodes, episodeQuery, newestFirst)
     }

@@ -1030,7 +1030,7 @@ fun PlayerScreen(
         initialTranslationMode = "original"
         val generation = playbackGeneration
         val offlineVideoExists = withContext(Dispatchers.IO) {
-            MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number)
+            MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number, currentEpisode.displayNumber)
                 ?.let { File(it).isFile && File(it).length() > 0L } == true
         }
         val koreanTitle = withContext(Dispatchers.IO) { SubtitleTitleResolver.resolve(context, anime) }
@@ -1111,7 +1111,7 @@ fun PlayerScreen(
     LaunchedEffect(reAnimeSubtitleTracks.size, subtitleUrl, currentEpisode.id) {
         if (!subtitleSelectionOpen) return@LaunchedEffect
         val offlineVideoExists = withContext(Dispatchers.IO) {
-            MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number)
+            MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number, currentEpisode.displayNumber)
                 ?.let { File(it).isFile && File(it).length() > 0L } == true
         }
         if (offlineVideoExists) return@LaunchedEffect
@@ -1166,6 +1166,7 @@ fun PlayerScreen(
         val generation = playbackGeneration
         val requestedEpisodeId = currentEpisode.id
         val requestedEpisodeNumber = currentEpisode.number
+        val requestedEpisodeLabel = currentEpisode.displayNumber
         Log.i("MpvEpisode", "RESOLVE_BEGIN episode=${currentEpisode.displayNumber} id=$requestedEpisodeId generation=$generation")
         loading = true
         error = null
@@ -1174,7 +1175,7 @@ fun PlayerScreen(
         offlineResolutionComplete = false
 
         val offlinePath = withContext(Dispatchers.IO) {
-            MpvOfflineStore.completedPathForEpisode(context, anime.id, requestedEpisodeId, requestedEpisodeNumber)
+            MpvOfflineStore.completedPathForEpisode(context, anime.id, requestedEpisodeId, requestedEpisodeNumber, requestedEpisodeLabel)
                 ?.takeIf { File(it).isFile && File(it).length() > 0L }
         }
         if (generation != playbackGeneration || currentEpisode.id != requestedEpisodeId) {

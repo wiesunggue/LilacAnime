@@ -95,14 +95,16 @@ object MpvOfflineStore {
         context: Context,
         animeId: String,
         episodeId: String,
-        episodeNumber: Int
+        episodeNumber: Int,
+        episodeLabel: String? = null
     ): String? {
         completedPath(context, animeId, episodeId)?.let { return it }
         if (episodeNumber <= 0) return null
 
         return listStatuses(context)
             .asSequence()
-            .filter { it.animeId == animeId && it.episodeNumber == episodeNumber }
+            .filter { it.state == "completed" && it.animeId == animeId &&
+                com.lilac.anime.data.PlaybackHistory.sameEpisode(episodeId, episodeNumber, it.episodeId, it.episodeNumber, episodeLabel, it.episodeKey) }
             .sortedByDescending { it.progress }
             .mapNotNull { status ->
                 val candidate = status.videoPath
