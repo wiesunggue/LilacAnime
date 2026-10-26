@@ -41,3 +41,13 @@
 ## 검증의 한계
 
 JVM 테스트·Android 전체 컴파일·APK 서명 검사는 실기기 검증을 대신하지 않습니다. 공급자별 실제 영상·번역 API, UI 조작, Android 서비스의 배터리/백그라운드 정책, Cast·TV 리모컨은 별도 확인이 필요합니다. 모든 버그가 없다고 보장하지 않습니다.
+
+## 최종 확인 결과
+
+- Android 검증 소스: `e8e475e3fb980370d6b0d44322b06d6d4344d78f`.
+- [GitHub Actions 실행 40357728863](https://github.com/wiesunggue/LilacAnime/actions/runs/40357728863) 성공.
+- JUnit XML 합계: **68개 통과, 실패 0, 오류 0, 건너뜀 0**.
+- 전체 Android 컴파일·APK 빌드 성공. `com.lilac.anime`, versionCode 37, `0.4.1-alpha-8-verified`.
+- APK Signature Scheme v2 유효성 검사 성공. 고정 키가 없어 APK 게시 단계는 실행하지 않았습니다. 기존 키를 사용한 업데이트 설치 검증은 미완료입니다.
+- 동기화 서버는 실제 Redis 7.2.6으로 `npm test`를 실행해 **14개 통과, 실패 0, 건너뜀 0**. 동시 쓰기·리비전 페이지·삭제 전파·인증·입력 제한·장애 응답을 재검증했습니다.
+- 위 결과는 테스트한 범위에 대한 결과이며, 실제 휴대폰/TV·Cast·외부 공급자별 영상/번역 API 동작의 완료 판정을 포함하지 않습니다.
