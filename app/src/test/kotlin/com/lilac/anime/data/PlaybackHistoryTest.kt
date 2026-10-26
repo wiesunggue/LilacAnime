@@ -58,4 +58,16 @@ class PlaybackHistoryTest {
         assertEquals("linkkf", PlaybackHistory.sourceFor(Anime(id="123"), "reanime"))
         assertEquals("miruro", PlaybackHistory.sourceFor(Anime(id="miruro:x"), "reanime"))
     }
+
+    @Test fun subAndDubOfSameEpisodeNeverShareProgress() {
+        val dubbed = WatchProgress("x", 4, .8f, "x_dub_ep_4")
+        val subbed = WatchProgress("x", 4, .2f, "x_ep_4")
+        assertNull(PlaybackHistory.find(listOf(dubbed), "x", "x_ep_4", 4))
+        assertNull(PlaybackHistory.find(listOf(subbed), "x", "x_dub_ep_4", 4))
+    }
+    @Test fun implicitResumeSkipsUnreleasedAndUnplayableEpisodes() {
+        val episodes = listOf(Episode("x_ep_1",1,"1"), Episode("x_ep_2",2,"미공개",playable=false), Episode("x_ep_3",3,"3"))
+        assertEquals("x_ep_3",PlaybackHistory.selectEpisode(episodes,WatchProgress("x",1,1f,"x_ep_1"),null)?.id)
+        assertNull(PlaybackHistory.selectEpisode(episodes,null,"x_ep_2"))
+    }
 }
