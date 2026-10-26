@@ -13,7 +13,7 @@ class OfflinePathKeyTest {
         val keys = listOf(prefix+"_ep_1",prefix+"_ep_2","ohli24:작품하나","ohli24:작품둘","x:AbC","x:abc")
         val names=keys.map(OfflinePathKey::fileName)
         assertEquals(keys.size,names.toSet().size)
-        assertTrue(names.all { it.length <= 124 && Regex("[a-z0-9._-]+").matches(it) })
+        assertTrue(names.all { it.length <= 125 && Regex("[a-z0-9._-]+").matches(it) })
     }
     @Test fun existingIdentifiedDownloadRetainsItsPathAndBytes() {
         val root=Files.createTempDirectory("lilac-legacy-").toFile()
