@@ -62,7 +62,7 @@ object MpvOfflineStore {
     fun root(context: Context): File = File(context.filesDir, ROOT)
 
     fun episodeDir(context: Context, animeId: String, episodeId: String): File =
-        File(root(context), safe("${animeId}__${episodeId}"))
+        OfflinePathKey.directory(root(context), animeId, episodeId)
 
     fun videoFile(context: Context, animeId: String, episodeId: String): File =
         File(episodeDir(context, animeId, episodeId), VIDEO)
