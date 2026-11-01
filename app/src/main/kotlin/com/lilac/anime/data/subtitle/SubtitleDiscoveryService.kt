@@ -47,7 +47,7 @@ object SubtitleDiscoveryService {
         // Kairan/Csora/Jimaku network discovery.
         val cachedChoices = withContext(Dispatchers.IO) {
             SubtitleStore.list(context, anime.id, episode.displayNumber, episode.number)
-                .filter { !it.ignored && File(it.path).isFile }
+                .filter { !it.ignored && it.episodeMatch && File(it.path).isFile }
                 .map { saved ->
                     val source = when (saved.source.lowercase()) {
                         "anissia" -> Source.ANISSIA

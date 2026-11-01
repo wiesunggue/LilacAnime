@@ -3,11 +3,13 @@ package com.lilac.anime.data.subtitle.translation
 import android.content.Context
 import android.util.Log
 import com.lilac.anime.data.subtitle.translation.providers.LocalTranslator
-import com.lilac.anime.player.LibassTranslationOverlay
-import com.lilac.anime.player.MpvPlaybackManager
 import com.lilac.anime.ui.settings.AiRuntimeDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,7 +19,12 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.charset.Charset
 
-class RealtimeSubtitleTranslator(private val context: Context) {
+class RealtimeSubtitleTranslator(
+    private val context: Context,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val providerFactory: (String) -> TranslationProvider = { TranslationManager.createProvider(context, it) },
+    private val hasApiKey: (String) -> Boolean = { SecureApiKeyStore.has(context, it) },
+) {
     private data class Cue(
         val startMs: Long,
         val endMs: Long,
@@ -27,6 +34,8 @@ class RealtimeSubtitleTranslator(private val context: Context) {
     )
 
     private val lock = Mutex()
+    private val lifecycleLock = Mutex()
+    private var requestedProviderId: String? = null
 
     // Blocking OkHttp/provider calls may outlive coroutine cancellation. A fresh
     // mutex is assigned to every subtitle session so an old request cannot hold
@@ -52,25 +61,15 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         val assEventData: String,
     )
 
-    suspend fun prepare(
+    private suspend fun prepare(
         path: String?,
         positionMs: Long,
         scope: CoroutineScope,
         providerId: String = "local",
     ) {
-        // PlayerScreen used to pass localSubtitle while the overlay rendered
-        // engine.currentSubtitleFilePath. When those differed, translation was
-        // performed against a stale/empty file. Always prefer the actual mpv
-        // external subtitle file when it exists.
         val requestedPath = path?.removePrefix("file://")
-        val enginePath = MpvPlaybackManager.currentEngineOrNull()
-            ?.currentSubtitleFilePath
-            ?.removePrefix("file://")
-        val resolvedPath = sequenceOf(enginePath, requestedPath)
-            .filterNotNull()
-            .map { File(it) }
-            .firstOrNull { it.isFile }
-            ?.absolutePath
+        val enginePath: String? = null
+        val resolvedPath = requestedPath?.let(::File)?.takeIf { it.isFile }?.absolutePath
 
         val file = resolvedPath?.let(::File)
         if (file == null) {
@@ -78,20 +77,21 @@ class RealtimeSubtitleTranslator(private val context: Context) {
                 TAG,
                 "SESSION_PREPARE_NO_FILE provider=$providerId requested=$requestedPath engine=$enginePath; clearing stale subtitle session",
             )
-            clear()
+            clearSession()
             return
         }
 
-        val content = readSubtitleText(file)
+        val content = withContext(dispatcher) { readSubtitleText(file) }
         if (content == null) {
             Log.e(TAG, "SESSION_READ_FAILED path=${file.absolutePath}")
-            clear()
+            clearSession()
             return
         }
 
-        val parsed = runCatching { parse(content, file.extension.lowercase()) }
+        val parsed = withContext(dispatcher) { runCatching { parse(content, file.extension.lowercase()) }
             .onFailure { Log.e(TAG, "PARSE_FAILED path=${file.absolutePath}", it) }
-            .getOrDefault(emptyList())
+            .getOrDefault(emptyList()) }
+        currentCoroutineContext().ensureActive()
         if (parsed.isEmpty()) {
             Log.w(
                 TAG,
@@ -99,8 +99,6 @@ class RealtimeSubtitleTranslator(private val context: Context) {
             )
         }
 
-        // Remove translated images from the previous mode/session immediately.
-        LibassTranslationOverlay.clearActiveTranslatedOverlay()
 
         lock.withLock {
             generation++
@@ -117,7 +115,8 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         endProviderSessionQuietly()
 
         activeProviderId = providerId.trim().lowercase().ifBlank { "local" }
-        activeProvider = TranslationManager.createProvider(context, activeProviderId)
+        requestedProviderId = activeProviderId
+        activeProvider = providerFactory(activeProviderId)
         sessionProvider = activeProvider as? TranslationSessionProvider
         val localGeneration = lock.withLock { generation }
 
@@ -126,7 +125,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
             "SESSION_PREPARE provider=$activeProviderId cues=${parsed.size} file=${file.name} requested=$requestedPath engine=$enginePath positionMs=$positionMs",
         )
 
-        worker = scope.launch(Dispatchers.IO) {
+        worker = scope.launch(dispatcher) {
             prefetchLoop(localGeneration, positionMs.coerceAtLeast(0L))
         }
     }
@@ -141,18 +140,21 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         positionMs: Long,
         scope: CoroutineScope,
         providerId: String = "local",
-    ) {
+    ) = lifecycleLock.withLock {
         val normalized = path
             ?.removePrefix("file://")
             ?.let(::File)
             ?.takeIf { it.isFile }
             ?.absolutePath
-            ?: return
+            ?: run {
+                if (sourcePath != null) clearSession()
+                return@withLock
+            }
         val wantedProvider = providerId.trim().lowercase().ifBlank { "local" }
         val alreadyPrepared = lock.withLock {
             sourcePath == normalized &&
-                activeProviderId == wantedProvider &&
-                sourceContent != null && cues.isNotEmpty() && worker?.isActive == true
+                requestedProviderId == wantedProvider &&
+                sourceContent != null && worker?.isActive == true
         }
         if (!alreadyPrepared) {
             Log.i(TAG, "SESSION_ENSURE_REPREPARE provider=$wantedProvider path=$normalized positionMs=$positionMs")
@@ -160,12 +162,20 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         }
     }
 
+    suspend fun playbackTick(path: String?, positionMs: Long, scope: CoroutineScope, providerId: String): List<ReadyEvent> {
+        ensurePrepared(path, positionMs, scope, providerId)
+        updatePlaybackPosition(positionMs)
+        return consumeReadyTranslatedEvents()
+    }
+
     /** Playback-time lookup only. Translation runs only in the prefetch worker. */
     suspend fun updatePlaybackPosition(positionMs: Long) {
         lock.withLock { prefetchPositionMs = positionMs.coerceAtLeast(0L) }
     }
 
-    suspend fun clear() {
+    suspend fun clear() = lifecycleLock.withLock { clearSession() }
+
+    private suspend fun clearSession() {
         val oldWorker = lock.withLock {
             generation++
             val old = worker
@@ -183,7 +193,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         activeProviderId = "local"
         activeProvider = LocalTranslator(context)
         sessionProvider = null
-        LibassTranslationOverlay.clearActiveTranslatedOverlay()
+        requestedProviderId = null
     }
 
     private suspend fun endProviderSessionQuietly() {
@@ -197,6 +207,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         if (sessionStarted) return
         val provider = sessionProvider ?: return
         provider.beginSession()
+        currentCoroutineContext().ensureActive()
         sessionStarted = true
     }
 
@@ -206,6 +217,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         val failures = mutableMapOf<String, Int>()
 
         while (true) {
+            currentCoroutineContext().ensureActive()
             if (localGeneration != lock.withLock { generation }) return
             val snapshot = lock.withLock { cues }
             if (snapshot.isEmpty()) {
@@ -215,14 +227,10 @@ class RealtimeSubtitleTranslator(private val context: Context) {
             }
 
             val prefs = context.getSharedPreferences("lilac_offline_store", Context.MODE_PRIVATE)
-            if (!prefs.getBoolean("pref_ai_prefetch_enabled", true)) {
-                // Do not terminate the worker permanently. The setting can be
-                // enabled again while the same episode is still playing.
-                delay(500L)
-                continue
-            }
-
-            val prefetchAhead = prefs.getInt("pref_ai_prefetch_ahead", 10).coerceIn(0, 40)
+            // Disabling look-ahead must still translate the current cue.
+            val prefetchAhead = if (prefs.getBoolean("pref_ai_prefetch_enabled", true)) {
+                prefs.getInt("pref_ai_prefetch_ahead", 10).coerceIn(0, 40)
+            } else 0
             val contextCueCount = prefs.getInt("pref_ai_context_cues", 4).coerceIn(0, 6)
             val batchSize = prefs.getInt("pref_ai_batch_size", 5).coerceIn(2, 8)
             val position = lock.withLock { prefetchPositionMs }
@@ -376,7 +384,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         )
 
         try {
-            val results = translateCloudBatchWithFallback(selectedProvider, sources)
+            val results = translateCloudBatchWithFallback(selectedProvider, sources, localGeneration)
             if (results.size != batch.size || results.any { it.isBlank() }) {
                 error("번역 응답 줄 수/내용 불일치 expected=${batch.size} actual=${results.size}")
             }
@@ -406,6 +414,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
                     val single = translateCloudBatchWithFallback(
                         selectedProvider,
                         listOf(modelText(cue.text, cue.kind)),
+                        localGeneration,
                     ).firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
                         ?: error("단일 자막 번역 결과가 비어 있습니다.")
                     lock.withLock {
@@ -439,6 +448,7 @@ class RealtimeSubtitleTranslator(private val context: Context) {
     private suspend fun translateCloudBatchWithFallback(
         primaryProvider: TranslationProvider,
         lines: List<String>,
+        localGeneration: Int,
     ): List<String> {
         val primaryId = primaryProvider.id.lowercase()
         val providerIds = (
@@ -449,11 +459,11 @@ class RealtimeSubtitleTranslator(private val context: Context) {
         var lastError: Throwable? = null
 
         for (providerId in providerIds) {
-            if (providerId != primaryId && !SecureApiKeyStore.has(context, providerId)) continue
+            if (providerId != primaryId && !hasApiKey(providerId)) continue
             val provider = if (providerId == primaryId) {
                 primaryProvider
             } else {
-                TranslationManager.createProvider(context, providerId)
+                providerFactory(providerId)
             }
 
             for (attempt in 0..2) {
@@ -462,7 +472,10 @@ class RealtimeSubtitleTranslator(private val context: Context) {
                         TAG,
                         "CLOUD_PROVIDER_ATTEMPT provider=$providerId attempt=${attempt + 1}/3 lines=${lines.size}",
                     )
+                    currentCoroutineContext().ensureActive()
                     val results = provider.translateBatch(lines)
+                    currentCoroutineContext().ensureActive()
+                    if (localGeneration != lock.withLock { generation }) throw CancellationException("Subtitle changed")
                     if (results.size != lines.size || results.any { it.isBlank() }) {
                         error("$providerId 응답 줄 수/내용 불일치 expected=${lines.size} actual=${results.size}")
                     }

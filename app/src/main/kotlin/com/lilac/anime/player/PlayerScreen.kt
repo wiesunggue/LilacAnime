@@ -1,5 +1,8 @@
 package com.lilac.anime.player
 
+import com.lilac.anime.core.concurrent.LatestRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import android.app.Activity
 import android.content.Context
 import android.content.ContentValues
@@ -314,7 +317,36 @@ fun PlayerScreen(
     var subtitleSelectionNeedsUserChoice by remember(currentEpisode.id) { mutableStateOf(true) }
     var initialTranslationMode by remember(currentEpisode.id) { mutableStateOf("original") }
     var initialSubtitleTitle by remember(currentEpisode.id) { mutableStateOf(anime.title) }
-    val realtimeTranslator = remember { RealtimeSubtitleTranslator(context.applicationContext) }
+    val realtimeTranslator = remember(currentEpisode.id) { RealtimeSubtitleTranslator(context.applicationContext) }
+    val initialSubtitleRequest = remember(currentEpisode.id) { LatestRequest(playerScope) }
+    val manualSubtitleRequest = remember(currentEpisode.id) { LatestRequest(playerScope) }
+    var subtitleApplying by remember(currentEpisode.id) { mutableStateOf(false) }
+    var subtitleRequestError by remember(currentEpisode.id) { mutableStateOf<String?>(null) }
+    DisposableEffect(initialSubtitleRequest, manualSubtitleRequest) {
+        onDispose {
+            initialSubtitleRequest.cancel()
+            manualSubtitleRequest.cancel()
+        }
+    }
+    fun cancelManualSubtitleRequest() {
+        manualSubtitleRequest.cancel()
+        anissiaSubtitlePickerOpen = false
+        jimakuSubtitlePickerOpen = false
+        anissiaSubtitleLoading = false
+        jimakuSubtitleLoading = false
+    }
+    fun continueWithoutSubtitle() {
+        initialSubtitleRequest.cancel()
+        subtitleDiscoveryLoading = false
+        subtitleApplying = false
+        subtitleSelectionOpen = false
+        selectedInitialSubtitleKeys = emptySet()
+        subtitleEnabled = false
+        subtitleTranslationMode = "original"
+        engine.setSubtitleVisible(false)
+        engine.play()
+        MainActivity.isVideoPlaying = true
+    }
     var realtimeSubtitleText by remember { mutableStateOf("") }
     var libassTranslationOverlay by remember { mutableStateOf<LibassTranslationOverlay?>(null) }
 
@@ -325,20 +357,8 @@ fun PlayerScreen(
     fun subtitlePreferencePrefs() = context.getSharedPreferences("lilac_subtitle_preferences", Context.MODE_PRIVATE)
     fun subtitleTrackKey(track: SubtitleTrack): String = "${track.language.trim().lowercase(Locale.ROOT)}|${track.label.trim().lowercase(Locale.ROOT)}"
 
-    fun isMultiSelectableSubtitle(choice: SubtitleDiscoveryService.Choice): Boolean =
-        choice.source == SubtitleDiscoveryService.Source.JIMAKU ||
-            choice.source == SubtitleDiscoveryService.Source.REANIME
-
     fun updateInitialSubtitleSelection(choice: SubtitleDiscoveryService.Choice) {
-        if (!isMultiSelectableSubtitle(choice)) {
-            selectedInitialSubtitleKeys = setOf(choice.key)
-            return
-        }
-        val sameSource = selectedInitialSubtitleKeys.mapNotNull { key ->
-            initialSubtitleChoices.firstOrNull { it.key == key }?.source
-        }.all { it == choice.source }
-        val base = if (sameSource) selectedInitialSubtitleKeys else emptySet()
-        selectedInitialSubtitleKeys = if (choice.key in base) base - choice.key else base + choice.key
+        selectedInitialSubtitleKeys = setOf(choice.key)
     }
 
     LaunchedEffect(anime.id) {
@@ -520,68 +540,38 @@ fun PlayerScreen(
         )
     }
 
-    LaunchedEffect(localSubtitle, currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider) {
-        realtimeSubtitleText = ""
-        if (subtitleTranslationMode == "korean") {
-            val source = engine.currentSubtitleFilePath ?: localSubtitle
-            realtimeTranslator.prepare(source, engine.currentPosition, playerScope, vm.playerSettings.translationProvider)
-            setSubtitleVisibleForMode(false)
-            realtimeTranslator.updatePlaybackPosition(engine.currentPosition)
-        } else {
-            realtimeTranslator.clear()
-            setSubtitleVisibleForMode(subtitleEnabled)
-        }
-    }
-
-    LaunchedEffect(engine, currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider) {
-        engine.subtitleEvents.collect { text ->
-            if (subtitleTranslationMode != "korean") return@collect
-            val normalized = text.trim()
-            if (normalized.isBlank()) {
-                realtimeSubtitleText = ""
-                return@collect
-            }
-            // Playback events only advance the background prefetch window.
-            // No model call and no one-line translation happens here.
-            realtimeTranslator.updatePlaybackPosition(engine.currentPosition)
-        }
-    }
-
-    LaunchedEffect(currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider, localSubtitle) {
+    // One owner for the translation worker and renderer. Drive it from the
+    // playback clock even when the native subtitle track emits no text events.
+    LaunchedEffect(engine, currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider, localSubtitle) {
+        libassTranslationOverlay?.clear()
         if (subtitleTranslationMode != "korean") {
-            libassTranslationOverlay?.clear()
+            setSubtitleVisibleForMode(subtitleEnabled)
             return@LaunchedEffect
         }
-        while (isActive) {
-            val source = engine.currentSubtitleFilePath ?: localSubtitle
-            realtimeTranslator.ensurePrepared(
-                source,
-                engine.currentPosition,
-                playerScope,
-                vm.playerSettings.translationProvider,
-            )
-            libassTranslationOverlay?.setSource(source)
-            realtimeTranslator.consumeReadyTranslatedEvents().forEach { event ->
-                libassTranslationOverlay?.addTranslatedEvent(
-                    event.assEventData,
-                    event.startMs,
-                    event.endMs,
+        try {
+            while (isActive) {
+                val source = engine.currentSubtitleFilePath ?: localSubtitle
+                val subtitlePositionMs = engine.currentPosition - subtitleSyncMs
+                val ready = realtimeTranslator.playbackTick(
+                    source, subtitlePositionMs, this, vm.playerSettings.translationProvider,
                 )
+                val overlay = libassTranslationOverlay
+                overlay?.setSource(source)
+                ready.forEach { event ->
+                    overlay?.addTranslatedEvent(event.assEventData, event.startMs, event.endMs)
+                }
+                val videoAspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
+                    ?: if (engine.videoWidth > 0 && engine.videoHeight > 0) {
+                        engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
+                    } else null
+                if (videoAspect != null) overlay?.setVideoAspectRatio(videoAspect)
+                overlay?.visibility = if (subtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                overlay?.sync(subtitlePositionMs, engine.isPlaying, if (boostActive) 2f else speed)
+                setSubtitleVisibleForMode(false)
+                delay(100L)
             }
-            val overlay = libassTranslationOverlay
-            val videoAspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
-                ?: if (engine.videoDisplayWidth > 0 && engine.videoDisplayHeight > 0) {
-                    engine.videoDisplayWidth.toDouble() / engine.videoDisplayHeight.toDouble()
-                } else if (engine.videoWidth > 0 && engine.videoHeight > 0) {
-                    engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
-                } else null
-            if (videoAspect != null) overlay?.setVideoAspectRatio(videoAspect)
-            overlay?.sync(engine.currentPosition, engine.isPlaying)
-            // Korean translation mode is strictly libass-only. The source
-            // subtitle track is never used as a fallback, including while a
-            // translated event is still being prepared.
-            setSubtitleVisibleForMode(false)
-            delay(100L)
+        } finally {
+            withContext(NonCancellable) { realtimeTranslator.clear() }
         }
     }
 
@@ -698,62 +688,51 @@ fun PlayerScreen(
     }
 
     fun openAnissiaSubtitlePicker() {
+        cancelManualSubtitleRequest()
         anissiaSubtitlePickerOpen = true
         anissiaSubtitleLoading = true
         anissiaSubtitleOptions = emptyList()
-        playerScope.launch {
-            val title = SubtitleTitleResolver.resolve(context, anime)
-            val options = runCatching {
-                AnissiaSubtitleService.listEpisodeSubtitles(
+        manualSubtitleRequest.start {
+            try {
+                val title = SubtitleTitleResolver.resolve(context, anime)
+                checkActive()
+                val options = AnissiaSubtitleService.listEpisodeSubtitles(
                     context, title, currentEpisode.number, currentEpisode.id, anime.seasonNumber, anime.id
                 )
-            }.onFailure { Log.w("SubtitleSelect", "ANISSIA_PICKER_SEARCH_FAILED", it) }
-                .getOrDefault(emptyList())
-            if (anissiaSubtitlePickerOpen) {
+                checkActive()
                 anissiaSubtitleOptions = options
-                anissiaSubtitleLoading = false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                checkActive()
+                Toast.makeText(context, "자막 검색 실패: ${error.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                if (isCurrent) anissiaSubtitleLoading = false
             }
         }
     }
 
     fun openJimakuSubtitlePicker() {
+        cancelManualSubtitleRequest()
         jimakuSubtitlePickerOpen = true
         jimakuSubtitleLoading = true
         jimakuSubtitleOptions = emptyList()
-        playerScope.launch(Dispatchers.IO) {
-            // Jimaku cache is title-scoped by AniList ID. Do not use the generic
-            // SubtitleStore index here: older saved entries can contain stale paths
-            // from another title. Only files inside this title's Jimaku cache and
-            // matching this exact episode are eligible.
-            val cachedJimaku = JimakuSubtitleService.listCachedSubtitles(
-                context = context,
-                anime = anime,
-                episodeNumber = currentEpisode.number,
-                episodeKey = currentEpisode.id
-            )
-
-            val options = if (cachedJimaku.isNotEmpty()) {
-                Log.d("SubtitleSelect", "LOCAL_JIMAKU_HIT episode=${currentEpisode.displayNumber} count=${cachedJimaku.size}; skip Jimaku network search")
-                cachedJimaku
-            } else {
-                withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    runCatching {
-                        JimakuSubtitleService.listEpisodeSubtitles(
-                            context = context,
-                            anime = anime,
-                            episodeNumber = currentEpisode.number,
-                            episodeKey = currentEpisode.id
-                        )
-                    }.onFailure {
-                        Log.w("SubtitleSelect", "JIMAKU_SETTINGS_SEARCH_FAILED", it)
-                    }.getOrDefault(emptyList())
+        manualSubtitleRequest.start {
+            try {
+                val cached = JimakuSubtitleService.listCachedSubtitles(context, anime, currentEpisode.number, currentEpisode.id)
+                checkActive()
+                val options = cached.ifEmpty {
+                    JimakuSubtitleService.listEpisodeSubtitles(context, anime, currentEpisode.number, currentEpisode.id)
                 }
-            }
-            withContext(kotlinx.coroutines.Dispatchers.Main) {
-                if (jimakuSubtitlePickerOpen) {
-                    jimakuSubtitleOptions = options
-                    jimakuSubtitleLoading = false
-                }
+                checkActive()
+                jimakuSubtitleOptions = options
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                checkActive()
+                Toast.makeText(context, "자막 검색 실패: ${error.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                if (isCurrent) jimakuSubtitleLoading = false
             }
         }
     }
@@ -782,6 +761,8 @@ fun PlayerScreen(
         }
         boostActive = false
         episodePickerOpen = false
+        initialSubtitleRequest.cancel()
+        cancelManualSubtitleRequest()
         playbackGeneration += 1
         Log.i("MpvEpisode", "EPISODE_SWITCH_BEGIN from=${currentEpisode.displayNumber} to=${target.displayNumber} generation=$playbackGeneration")
         // Never reuse the previous foreground libmpv session for a new episode.
@@ -982,9 +963,9 @@ fun PlayerScreen(
         }
     }
 
-    suspend fun applyInitialSubtitles(choices: List<SubtitleDiscoveryService.Choice>): Boolean {
-        val subtitleSearchTitle = SubtitleTitleResolver.resolve(context, anime)
-        val selected = choices.filter { it.key in selectedInitialSubtitleKeys }
+    suspend fun applyInitialSubtitles(choices: List<SubtitleDiscoveryService.Choice>, ticket: LatestRequest.Ticket): Boolean {
+        val selected = choices.take(1)
+        val subtitleSearchTitle = initialSubtitleTitle
         if (selected.isEmpty()) return false
         val paths = mutableListOf<String>()
         for (choice in selected) {
@@ -1000,15 +981,17 @@ fun PlayerScreen(
                     referer = subtitleReferer ?: streamReferer, source = choice.source.name.lowercase(Locale.ROOT)
                 )
             }
+            ticket.checkActive()
             if (!path.isNullOrBlank() && File(path).isFile) {
                 paths += path
                 SubtitleStore.save(context, anime.id, currentEpisode.id, currentEpisode.number, choice.source.name.lowercase(Locale.ROOT), path)
             }
         }
-        val activePath = paths.firstOrNull() ?: selected.firstOrNull { !it.path.isNullOrBlank() }?.path
+        ticket.checkActive()
+        val activePath = paths.firstOrNull() ?: return false
         selectedInitialSubtitlePath = activePath
         localSubtitle = activePath
-        if (activePath.isNullOrBlank()) return false
+        subtitleEnabled = true
         withContext(Dispatchers.Main.immediate) {
             engine.replaceSubtitleTrack(activePath)
             engine.setSubtitleDelay(vm.playerSettings.syncOffsetMs)
@@ -1021,6 +1004,32 @@ fun PlayerScreen(
     }
 
 
+    fun startInitialSubtitlePlayback(choices: List<SubtitleDiscoveryService.Choice>) {
+        subtitleDiscoveryLoading = false
+        subtitleApplying = true
+        subtitleRequestError = null
+        initialSubtitleRequest.start {
+            try {
+                if (applyInitialSubtitles(choices, this)) {
+                    checkActive()
+                    subtitleSelectionOpen = false
+                    subtitleSelectionNeedsUserChoice = false
+                    subtitleTranslationMode = if (initialTranslationMode == "korean" && choices.firstOrNull()?.language != "한국어") "korean" else "original"
+                    setSubtitleVisibleForMode(subtitleEnabled)
+                    engine.play()
+                    MainActivity.isVideoPlaying = true
+                } else subtitleRequestError = "선택한 자막 파일을 불러오지 못했습니다. 다른 파일을 선택하거나 자막 없이 재생하세요."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                checkActive()
+                subtitleRequestError = "자막 적용 실패: ${error.message}"
+            } finally {
+                if (isCurrent) subtitleApplying = false
+            }
+        }
+    }
+
     LaunchedEffect(anime.id, currentEpisode.id) {
         subtitleDiscoveryLoading = true
         subtitleSelectionOpen = true
@@ -1028,12 +1037,15 @@ fun PlayerScreen(
         selectedInitialSubtitlePath = null
         subtitleSelectionNeedsUserChoice = true
         initialTranslationMode = "original"
+        initialSubtitleRequest.start {
+        try {
         val generation = playbackGeneration
         val offlineVideoExists = withContext(Dispatchers.IO) {
             MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number, currentEpisode.displayNumber)
                 ?.let { File(it).isFile && File(it).length() > 0L } == true
         }
         val koreanTitle = withContext(Dispatchers.IO) { SubtitleTitleResolver.resolve(context, anime) }
+        checkActive()
         initialSubtitleTitle = koreanTitle
         val discovered = runCatching {
             if (offlineVideoExists) {
@@ -1072,17 +1084,19 @@ fun PlayerScreen(
                 reAnimeTracks = reAnimeSubtitleTracks
             )
         }.getOrElse {
+            if (it is CancellationException) throw it
             Log.w("SubtitleDiscovery", "DISCOVERY_FAILED", it)
             emptyList()
         }
-        delay(700L)
-        if (generation != playbackGeneration) return@LaunchedEffect
-        initialSubtitleChoices = discovered
+        checkActive()
+        if (generation != playbackGeneration) return@start
+        initialSubtitleChoices = (discovered + initialSubtitleChoices).distinctBy { it.key }
         subtitleDiscoveryLoading = false
         val storedProfile = withContext(Dispatchers.IO) { SubtitleSelectionStore.load(context, anime.id) }
-        val matched = discovered.filter { SubtitleSelectionStore.matches(it, storedProfile) }
+        checkActive()
+        val matched = discovered.filter { SubtitleSelectionStore.matches(it, storedProfile) }.take(1)
         selectedInitialSubtitleKeys = matched.map { it.key }.toSet()
-        subtitleSelectionNeedsUserChoice = storedProfile.isNotEmpty() && matched.size < storedProfile.size
+        subtitleSelectionNeedsUserChoice = storedProfile.isNotEmpty() && matched.isEmpty()
         if (matched.isEmpty()) selectedInitialSubtitleKeys = discovered.firstOrNull()?.let { setOf(it.key) }.orEmpty()
         if (discovered.isEmpty()) {
             subtitleSelectionOpen = false
@@ -1091,20 +1105,16 @@ fun PlayerScreen(
                 MainActivity.isVideoPlaying = true
             }
         } else if (storedProfile.isNotEmpty() && !subtitleSelectionNeedsUserChoice) {
-            // The saved profile is an anime-wide preference. If every previously
-            // selected subtitle has an episode-equivalent match (the filename
-            // may differ only by the episode number), this episode needs no
-            // manual selection: apply it and start immediately.
-            playerScope.launch {
-                if (applyInitialSubtitles(matched)) {
-                    subtitleSelectionOpen = false
-                    subtitleSelectionNeedsUserChoice = false
-                    setSubtitleVisibleForMode(subtitleEnabled)
-                    subtitleTranslationMode = if (initialTranslationMode == "korean" && matched.any { it.language != "한국어" }) "korean" else "original"
-                    engine.play()
-                    MainActivity.isVideoPlaying = true
-                }
-            }
+            startInitialSubtitlePlayback(matched)
+        }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            checkActive()
+            subtitleRequestError = "자막 검색 실패: ${error.message}"
+        } finally {
+            if (isCurrent) subtitleDiscoveryLoading = false
+        }
         }
     }
 
@@ -1132,26 +1142,7 @@ fun PlayerScreen(
         if (additions.isNotEmpty()) {
             val merged = (initialSubtitleChoices + additions).distinctBy { it.key }
             initialSubtitleChoices = merged
-            val storedProfile = withContext(Dispatchers.IO) { SubtitleSelectionStore.load(context, anime.id) }
-            if (storedProfile.isNotEmpty()) {
-                val matched = merged.filter { SubtitleSelectionStore.matches(it, storedProfile) }
-                if (matched.isNotEmpty()) {
-                    selectedInitialSubtitleKeys = matched.map { it.key }.toSet()
-                    subtitleSelectionNeedsUserChoice = matched.size < storedProfile.size
-                    if (!subtitleSelectionNeedsUserChoice) {
-                        playerScope.launch {
-                            if (applyInitialSubtitles(matched)) {
-                                subtitleSelectionOpen = false
-                                subtitleSelectionNeedsUserChoice = false
-                                setSubtitleVisibleForMode(subtitleEnabled)
-                                subtitleTranslationMode = if (initialTranslationMode == "korean" && matched.any { it.language != "한국어" }) "korean" else "original"
-                                engine.play()
-                                MainActivity.isVideoPlaying = true
-                            }
-                        }
-                    }
-                }
-            } else if (selectedInitialSubtitleKeys.isEmpty()) {
+            if (selectedInitialSubtitleKeys.isEmpty() && subtitleSelectionOpen) {
                 selectedInitialSubtitleKeys = merged.firstOrNull()?.let { setOf(it.key) }.orEmpty()
             }
         }
@@ -1984,7 +1975,7 @@ fun PlayerScreen(
                             engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
                         } else null
                     if (aspect != null) view.setVideoAspectRatio(aspect)
-                    view.sync(engine.currentPosition, engine.isPlaying)
+                    view.sync(engine.currentPosition - subtitleSyncMs, engine.isPlaying, if (boostActive) 2f else speed)
                 }
             },
             update = { view ->
@@ -1997,7 +1988,7 @@ fun PlayerScreen(
                         engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
                     } else null
                 if (aspect != null) view.setVideoAspectRatio(aspect)
-                view.sync(engine.currentPosition, engine.isPlaying)
+                view.sync(engine.currentPosition - subtitleSyncMs, engine.isPlaying, if (boostActive) 2f else speed)
             }
         )
         }
@@ -2160,7 +2151,7 @@ fun PlayerScreen(
                                     TvPlayerSettingSwitch("자막 표시", "자막 트랙 표시 또는 숨기기", subtitleEnabled, { subtitleEnabled = it; setSubtitleVisibleForMode(it) })
                                     TvPlayerSettingSwitch("ASS 효과 유지", "위치·색상·테두리 효과를 유지합니다. 끄면 성능이 나아질 수 있습니다.", vm.playerSettings.assEffectsEnabled, { vm.updatePlayerSettings(context, vm.playerSettings.copy(assEffectsEnabled = it)); engine.setAssEffectsEnabled(it) })
                                     Spacer(Modifier.height(18.dp))
-                                    Text("자막 소스", color = Color.White.copy(.7f), fontSize = 14.sp)
+                                    Text("자막 파일을 가져올 곳", color = Color.White.copy(.7f), fontSize = 14.sp)
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                                         listOf("linkkf" to "Linkkf", "reanime" to "Re:Anime", "jimaku" to "Jimaku", "anissia" to "Anissia", "user" to "사용자").forEach { (source, label) ->
                                             val selected = subtitleSource == source
@@ -2681,7 +2672,7 @@ fun PlayerScreen(
                             }
 
                             Spacer(Modifier.height(8.dp))
-                            Text("자막 소스", color = Color.White.copy(.72f), fontSize = 11.sp)
+                            Text("자막 파일을 가져올 곳", color = Color.White.copy(.72f), fontSize = 11.sp)
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 modifier = Modifier
@@ -2740,18 +2731,17 @@ fun PlayerScreen(
                             }
 
                             Spacer(Modifier.height(10.dp))
-                            Text("자막 언어", color = Color.White.copy(.72f), fontSize = 11.sp)
+                            Text("선택한 파일 표시 방식", color = Color.White.copy(.72f), fontSize = 11.sp)
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp)
                             ) {
-                                listOf("original" to "원본", "korean" to "한국어 번역").forEach { (mode, label) ->
+                                listOf("original" to "원본 그대로", "korean" to "AI 한국어 번역").forEach { (mode, label) ->
                                     Surface(
                                         onClick = {
                                             subtitleTranslationMode = mode
                                             if (mode == "original") {
                                                 realtimeSubtitleText = ""
-                                                playerScope.launch { realtimeTranslator.clear() }
                                                 setSubtitleVisibleForMode(subtitleEnabled)
                                             } else {
                                                 // LaunchedEffect owns translator lifecycle. Do not call prepare here as
@@ -2924,7 +2914,7 @@ fun PlayerScreen(
                         }
 
                         Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
-                            Text("이 회차의 저장 자막", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("저장 파일 관리 (재생 선택과 별개)", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                             if (savedSubtitles.isEmpty()) Text("저장된 원본 자막이 없습니다.", color = Color.White.copy(.45f), fontSize = 10.sp)
                             savedSubtitles.forEach { saved ->
                                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2932,7 +2922,7 @@ fun PlayerScreen(
                                         Text(saved.source.uppercase(Locale.ROOT), color = if (saved.ignored) Color.Gray else Color.White, fontSize = 9.sp)
                                         Text(saved.displayName, color = if (saved.ignored) Color.Gray else Color.White.copy(.78f), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
-                                    TextButton(onClick = { playerScope.launch { SubtitleStore.setIgnored(context, anime.id, currentEpisode.displayNumber, currentEpisode.number, saved.source, !saved.ignored); savedSubtitles = SubtitleStore.list(context, anime.id, currentEpisode.displayNumber, currentEpisode.number) } }) { Text(if (saved.ignored) "사용" else "제외", color = Color.White, fontSize = 9.sp) }
+                                    TextButton(onClick = { playerScope.launch { SubtitleStore.setIgnored(context, anime.id, currentEpisode.displayNumber, currentEpisode.number, saved.source, !saved.ignored); savedSubtitles = SubtitleStore.list(context, anime.id, currentEpisode.displayNumber, currentEpisode.number) } }) { Text(if (saved.ignored) "목록에 포함" else "목록에서 제외", color = Color.White, fontSize = 9.sp) }
                                     TextButton(onClick = { playerScope.launch { SubtitleStore.deleteOne(context, anime.id, currentEpisode.displayNumber, currentEpisode.number, saved.source, saved.path); savedSubtitles = SubtitleStore.list(context, anime.id, currentEpisode.displayNumber, currentEpisode.number) } }) { Text("삭제", color = Color(0xFFFF8A80), fontSize = 9.sp) }
                                 }
                             }
@@ -2953,7 +2943,7 @@ fun PlayerScreen(
 
                         if (anissiaSubtitlePickerOpen) {
                             AlertDialog(
-                                onDismissRequest = { if (!anissiaSubtitleLoading) anissiaSubtitlePickerOpen = false },
+                                onDismissRequest = { cancelManualSubtitleRequest() },
                                 title = { Text("Anissia 자막 선택") },
                                 text = {
                                     Column(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
@@ -2974,9 +2964,8 @@ fun PlayerScreen(
                                                             .clickable {
                                                                 if (anissiaSubtitleLoading) return@clickable
                                                                 anissiaSubtitleLoading = true
-                                                                playerScope.launch {
+                                                                manualSubtitleRequest.start {
                                                                     val title = SubtitleTitleResolver.resolve(context, anime)
-                                                                    val wasPlaying = engine.isPlaying
                                                                     // Download/apply the subtitle without forcing a pause. Some engines report
                                                                     // stale isPlaying state around subtitle-track replacement; the old pause/play
                                                                     // pair could leave playback stopped after selecting an Anissia subtitle.
@@ -2984,8 +2973,10 @@ fun PlayerScreen(
                                                                         val downloaded = AnissiaSubtitleService.downloadSelectedSubtitle(
                                                                             context, title, currentEpisode.number, currentEpisode.id, anime.id, option
                                                                         )
-                                                                        if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
-                                                                            localSubtitle = downloaded
+                                                                        checkActive()
+                                                                    if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
+                                                                            subtitleEnabled = true
+                                                                        localSubtitle = downloaded
                                                                             engine.replaceSubtitleTrack(downloaded)
                                                                             engine.setSubtitleDelay(subtitleSyncMs)
                                                                             setSubtitleVisibleForMode(subtitleEnabled)
@@ -2995,21 +2986,24 @@ fun PlayerScreen(
                                                                             anissiaSubtitlePickerOpen = false
                                                                             // Selecting an Anissia subtitle should leave the video playable,
                                                                             // even if the playback engine briefly transitioned to paused.
-                                                                            engine.play()
                                                                             Toast.makeText(context, "${option.creator.ifBlank { "Anissia" }} 자막을 적용했습니다.", Toast.LENGTH_SHORT).show()
                                                                         } else {
                                                                             Toast.makeText(context, "선택한 Anissia 자막을 불러오지 못했습니다.", Toast.LENGTH_SHORT).show()
                                                                         }
+                                                                    } catch (cancelled: CancellationException) {
+                                                                        throw cancelled
+                                                                    } catch (error: Exception) {
+                                                                        checkActive()
+                                                                        Toast.makeText(context, "자막 적용 실패: ${error.message}", Toast.LENGTH_LONG).show()
                                                                     } finally {
-                                                                        anissiaSubtitleLoading = false
-                                                                        if (wasPlaying && !engine.isPlaying) engine.play()
+                                                                        if (isCurrent) anissiaSubtitleLoading = false
                                                                     }
                                                                 }
                                                             }
                                                             .padding(horizontal = 8.dp, vertical = 9.dp),
                                                         verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        RadioButton(selected = cached, onClick = null)
+                                                        RadioButton(selected = localSubtitle == option.cachedPath, onClick = null)
                                                         Column(Modifier.weight(1f)) {
                                                             Text(option.creator.ifBlank { "Anissia 자막" }, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                                             Text(
@@ -3031,16 +3025,14 @@ fun PlayerScreen(
                                     }
                                 },
                                 confirmButton = {
-                                    TextButton(onClick = { anissiaSubtitlePickerOpen = false }, enabled = !anissiaSubtitleLoading) { Text("닫기") }
+                                    TextButton(onClick = { cancelManualSubtitleRequest() }) { Text(if (anissiaSubtitleLoading) "취소" else "닫기") }
                                 }
                             )
                         }
 
                         if (jimakuSubtitlePickerOpen) {
                             AlertDialog(
-                                onDismissRequest = {
-                                    if (!jimakuSubtitleLoading) jimakuSubtitlePickerOpen = false
-                                },
+                                onDismissRequest = { cancelManualSubtitleRequest() },
                                 title = { Text("Jimaku 자막 선택") },
                                 text = {
                                     Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -3062,10 +3054,8 @@ fun PlayerScreen(
                                                     val selected = option.cachedPath != null && localSubtitle == option.cachedPath
                                                     Surface(
                                                         onClick = {
-                                                            playerScope.launch {
-                                                                val wasPlaying = engine.isPlaying
+                                                            manualSubtitleRequest.start {
                                                                 jimakuSubtitleLoading = true
-                                                                if (wasPlaying) engine.pause()
                                                                 try {
                                                                     val downloaded = runCatching {
                                                                         JimakuSubtitleService.downloadSelectedSubtitle(
@@ -3076,9 +3066,11 @@ fun PlayerScreen(
                                                                             option = option
                                                                         )
                                                                     }.getOrNull()
+                                                                    checkActive()
                                                                     if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
                                                                         subtitleSource = "jimaku"
                                                                         vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSourcePreference = "jimaku"))
+                                                                        subtitleEnabled = true
                                                                         localSubtitle = downloaded
                                                                         engine.replaceSubtitleTrack(downloaded)
                                                                         engine.setSubtitleDelay(subtitleSyncMs)
@@ -3089,9 +3081,13 @@ fun PlayerScreen(
                                                                     } else {
                                                                         Toast.makeText(context, "선택한 Jimaku 자막을 불러오지 못했습니다.", Toast.LENGTH_SHORT).show()
                                                                     }
+                                                                } catch (cancelled: CancellationException) {
+                                                                    throw cancelled
+                                                                } catch (error: Exception) {
+                                                                    checkActive()
+                                                                    Toast.makeText(context, "자막 적용 실패: ${error.message}", Toast.LENGTH_LONG).show()
                                                                 } finally {
-                                                                    jimakuSubtitleLoading = false
-                                                                    if (wasPlaying) engine.play()
+                                                                    if (isCurrent) jimakuSubtitleLoading = false
                                                                 }
                                                             }
                                                         },
@@ -3123,7 +3119,7 @@ fun PlayerScreen(
                                     }
                                 },
                                 confirmButton = {
-                                    TextButton(onClick = { jimakuSubtitlePickerOpen = false }, enabled = !jimakuSubtitleLoading) { Text("닫기") }
+                                    TextButton(onClick = { cancelManualSubtitleRequest() }) { Text(if (jimakuSubtitleLoading) "취소" else "닫기") }
                                 }
                             )
                         }
@@ -3147,7 +3143,7 @@ fun PlayerScreen(
                                                         subtitleSource = "reanime"
                                                         vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSourcePreference = "reanime"))
                                                         reAnimeSubtitleTrackPickerOpen = false
-                                                        playerScope.launch {
+                                                        manualSubtitleRequest.start {
                                                             val downloaded = runCatching {
                                                                 downloadSubtitleFile(
                                                                     context = context,
@@ -3159,6 +3155,7 @@ fun PlayerScreen(
                                                                     source = "reanime"
                                                                 )
                                                             }.getOrNull()
+                                                            checkActive()
                                                             if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
                                                                 SubtitleStore.save(context, anime.id, currentEpisode.id, currentEpisode.number, "reanime", downloaded)
                                                                 val playbackSubtitle = maybeTranslateSubtitle(downloaded) ?: downloaded
@@ -3474,75 +3471,18 @@ fun PlayerScreen(
     }
 
     if (subtitleSelectionOpen) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("자막 선택") },
-            text = {
-                Column(Modifier.fillMaxWidth().heightIn(max = 500.dp)) {
-                    Text(if (subtitleDiscoveryLoading) "사용 가능한 자막을 확인하는 중..." else initialSubtitleTitle.ifBlank { anime.title }, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    if (!subtitleDiscoveryLoading && subtitleSelectionNeedsUserChoice) {
-                        Text("이 회차에는 이전에 선택한 자막이 없어 이 회차의 자막을 선택해주세요.", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    if (subtitleDiscoveryLoading) {
-                        Text("사용 가능한 자막을 확인하는 중...", fontSize = 13.sp)
-                    } else if (initialSubtitleChoices.isEmpty()) {
-                        Text("사용 가능한 자막을 찾지 못했습니다. 자막 없이 재생할 수 있습니다.", fontSize = 13.sp)
-                    } else {
-                        androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 330.dp)) {
-                            items(initialSubtitleChoices.size) { index ->
-                                val choice = initialSubtitleChoices[index]
-                                val selected = choice.key in selectedInitialSubtitleKeys
-                                val multi = isMultiSelectableSubtitle(choice)
-                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { updateInitialSubtitleSelection(choice) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    if (multi) {
-                                        androidx.compose.material3.Checkbox(checked = selected, onCheckedChange = { updateInitialSubtitleSelection(choice) })
-                                    } else {
-                                        RadioButton(selected = selected, onClick = { updateInitialSubtitleSelection(choice) })
-                                    }
-                                    Column(Modifier.weight(1f)) {
-                                        Text(choice.label, fontWeight = FontWeight.SemiBold)
-                                        Text("${choice.language} · ${choice.title}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        if (multi) Text("여러 트랙 선택 가능", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("보기", fontWeight = FontWeight.SemiBold)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = initialTranslationMode == "original", onClick = { initialTranslationMode = "original" }, label = { Text("원문 보기") })
-                        FilterChip(selected = initialTranslationMode == "korean", onClick = { initialTranslationMode = "korean" }, label = { Text("번역 보기") })
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(enabled = !subtitleDiscoveryLoading && selectedInitialSubtitleKeys.isNotEmpty(), onClick = {
-                    playerScope.launch {
-                        val choices = initialSubtitleChoices.filter { it.key in selectedInitialSubtitleKeys }
-                        if (applyInitialSubtitles(choices)) {
-                            subtitleSelectionOpen = false
-                            subtitleSelectionNeedsUserChoice = false
-                            setSubtitleVisibleForMode(subtitleEnabled)
-                            subtitleTranslationMode = if (initialTranslationMode == "korean" && choices.any { it.language != "한국어" }) "korean" else "original"
-                            engine.play()
-                            MainActivity.isVideoPlaying = true
-                        } else Toast.makeText(context, "선택한 자막을 불러오지 못했습니다.", Toast.LENGTH_SHORT).show()
-                    }
-                }) { Text("재생") }
-            },
-            dismissButton = {
-                if (!subtitleDiscoveryLoading) TextButton(onClick = {
-                    SubtitleSelectionStore.clear(context, anime.id)
-                    selectedInitialSubtitleKeys = emptySet()
-                    subtitleSelectionOpen = false
-                    setSubtitleVisibleForMode(false)
-                    engine.play()
-                    MainActivity.isVideoPlaying = true
-                }) { Text("자막 없이") }
-            }
+        SubtitleSelectionDialog(
+            title = initialSubtitleTitle,
+            choices = initialSubtitleChoices,
+            selectedKey = selectedInitialSubtitleKeys.firstOrNull(),
+            searching = subtitleDiscoveryLoading,
+            applying = subtitleApplying,
+            translate = initialTranslationMode == "korean",
+            error = subtitleRequestError,
+            onSelect = { updateInitialSubtitleSelection(it) },
+            onTranslate = { initialTranslationMode = if (it) "korean" else "original" },
+            onPlay = { startInitialSubtitlePlayback(initialSubtitleChoices.filter { it.key in selectedInitialSubtitleKeys }) },
+            onCancel = { continueWithoutSubtitle() },
         )
     }
 }

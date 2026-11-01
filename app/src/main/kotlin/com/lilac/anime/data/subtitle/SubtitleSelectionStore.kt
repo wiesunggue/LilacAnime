@@ -27,7 +27,7 @@ object SubtitleSelectionStore {
     }
 
     fun save(context: Context, animeId: String, choices: Collection<SubtitleDiscoveryService.Choice>) {
-        val signatures = choices.map(::signature).filter { it.isNotBlank() }.toSet()
+        val signatures = choices.take(1).map(::signature).filter { it.isNotBlank() }.toSet()
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .edit()
             .putStringSet(KEY_PREFIX + animeId, signatures)

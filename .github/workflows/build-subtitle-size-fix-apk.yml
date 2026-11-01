@@ -1,9 +1,10 @@
-name: Build Android desktop convenience APK
+name: Verify subtitle playback and cancellation
 
 on:
   push:
     branches:
       - feat/android-functional-parity
+      - fix/subtitle-lifecycle
   pull_request:
     branches:
       - main
@@ -98,14 +99,15 @@ jobs:
               compileSdk = 36
 
               defaultConfig {
-                  applicationId = "com.lilac.anime"
+                  applicationId = "com.lilac.anime.subtitlecheck"
+                  testInstrumentationRunner = "com.lilac.anime.player.SubtitleTestRunner"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 37
-                  versionName = "0.4.1-alpha-8-verified"
+                  versionCode = 38
+                  versionName = "0.4.1-alpha-9-subtitle-check"
 
                   ndk {
-                      abiFilters += "arm64-v8a"
+                      abiFilters += listOf("arm64-v8a", "x86_64")
                   }
               }
 
@@ -131,6 +133,7 @@ jobs:
               }
 
               buildFeatures { compose = true }
+              testOptions { unitTests.isIncludeAndroidResources = true }
 
               packaging {
                   jniLibs {
@@ -177,6 +180,12 @@ jobs:
               testImplementation("junit:junit:4.13.2")
               testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
               testImplementation("org.json:json:20240303")
+              testImplementation("org.robolectric:robolectric:4.14.1")
+              androidTestImplementation("androidx.test:runner:1.6.2")
+              androidTestImplementation("androidx.test.ext:junit:1.2.1")
+              androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+              androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.7.0")
+              debugImplementation("androidx.compose.ui:ui-test-manifest:1.7.0")
               implementation(kotlin("stdlib"))
               implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
               implementation("androidx.media3:media3-exoplayer:1.8.0")
@@ -215,6 +224,33 @@ jobs:
           LILAC_KEY_PASSWORD: ${{ secrets.LILAC_ANDROID_KEY_PASSWORD }}
         shell: bash
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Android UI and native subtitle rendering tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon
+
+      - name: Upload Android functional test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-device-test-reports
+          path: |
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Verify APK signature and package metadata
         env:

@@ -58,6 +58,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     private var widthPx = 0
     private var heightPx = 0
     private var playing = false
+    private var playbackSpeed = 1f
     private var positionMs = 0L
     private var syncWallClockMs = 0L
     private val events = mutableListOf<EventRange>()
@@ -198,8 +199,9 @@ class LibassTranslationOverlay @JvmOverloads constructor(
         if (isReady()) scheduleRender()
     }
 
-    fun sync(positionMs: Long, playing: Boolean) {
-        this.positionMs = positionMs.coerceAtLeast(0L)
+    fun sync(positionMs: Long, playing: Boolean, speed: Float = 1f) {
+        this.positionMs = positionMs
+        this.playbackSpeed = speed.coerceIn(0.25f, 4f)
         this.syncWallClockMs = SystemClock.elapsedRealtime()
         this.playing = playing
         if (isReady()) scheduleRender()
@@ -286,7 +288,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
         if (target.isRecycled) return
 
         val renderPosition = if (playing && syncWallClockMs > 0L) {
-            positionMs + (SystemClock.elapsedRealtime() - syncWallClockMs).coerceAtLeast(0L)
+            positionMs + ((SystemClock.elapsedRealtime() - syncWallClockMs).coerceAtLeast(0L) * playbackSpeed).toLong()
         } else {
             positionMs
         }
@@ -360,7 +362,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     }
 
     private fun buildCodecPrivate(content: String, ext: String): String {
-        if (ext != "ass" && ext != "ssa") {
+        if (!Regex("(?im)^\\s*Dialogue:|^\\s*\\[Script Info]").containsMatchIn(content)) {
             return """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
