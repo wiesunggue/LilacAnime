@@ -8,7 +8,8 @@ internal object SubtitleMarkup {
     private val tags = Regex("(?is)</?(?:font|span|b|i|u|s|strike|ruby|rt|rp|p|div|c(?:\\.[\\w-]+)*|v|lang)(?=[\\s>/])[^>]*>")
     private val timestamps = Regex("<\\d{2}:\\d{2}(?::\\d{2})?\\.\\d{3}>")
     private val markers = Regex("(?i)</?LILAC_\\d+>")
-    private val overrides = Regex("\\{\\\\[^{}]*}")
+    // Android uses ICU: a literal closing brace must be escaped as well.
+    private val overrides = Regex("\\{\\\\[^{}]*\\}")
 
     fun stripHtml(text: String): String {
         var value = text.replace("\r\n", "\n").replace('\r', '\n')
