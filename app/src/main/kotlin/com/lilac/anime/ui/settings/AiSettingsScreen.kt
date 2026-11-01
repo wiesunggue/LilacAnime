@@ -544,18 +544,9 @@ fun AiSettingsScreen(vm: AnimeViewModel, onNavigate: (String) -> Unit) {
             OutlinedTextField(value=settings.translationPrompt,onValueChange={vm.updatePlayerSettings(context,settings.copy(translationPrompt=it))},modifier=Modifier.fillMaxWidth(),minLines=6,maxLines=14,label={Text("사용자 프롬프트")})
             OutlinedButton(onClick={vm.updatePlayerSettings(context,settings.copy(translationPrompt=LocalAiTranslationRuntime.DEFAULT_PROMPT))},modifier=Modifier.fillMaxWidth()){Text("기본 사용자 프롬프트로 복원")}
 
-            Spacer(Modifier.height(18.dp)); Text("번역 테스트",fontSize=16.sp,fontWeight=FontWeight.Bold)
-            OutlinedTextField(value=testText,onValueChange={testText=it},modifier=Modifier.fillMaxWidth(),minLines=2,maxLines=4,label={Text("일본어 문장")},enabled=!testing)
-            OutlinedButton(onClick={scope.launch{testing=true;testResult="번역 중...";val r=TranslationManager.test(context,settings.translationProvider,testText);testResult=r.fold({it},{err->AiRuntimeDiagnostics.record(context, "번역 테스트 (${settings.translationProvider})", err); latestAiError=AiRuntimeDiagnostics.latest(context); "테스트 실패: ${err.message.orEmpty()}"});testing=false}},enabled=!testing && (settings.translationProvider != "local" || models.any{it.compatibility==Compatibility.SUPPORTED}),modifier=Modifier.fillMaxWidth()){Text(if(testing)"번역 테스트 중..." else "번역 테스트 실행")}
-            testResult?.let { result ->
-                Text(result, fontSize=12.sp)
-                if (result.startsWith("테스트 실패")) {
-                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick={latestAiError?.let { clipboard.setText(AnnotatedString(it.asCopyText())) }}) { Text("오류 복사") }
-                        TextButton(onClick={showAiErrorDetails=true}) { Text("상세 / 해결 방법") }
-                    }
-                }
-            }
+            TranslationTestPanel(provider = settings.translationProvider, execute = { input ->
+                TranslationManager.test(context, settings.translationProvider, input)
+            })
 
             Spacer(Modifier.height(18.dp)); Text("클라우드 번역 API",fontSize=16.sp,fontWeight=FontWeight.Bold)
             keyProviders.forEach{(id,label)->OutlinedButton(onClick={keyProvider=id;keyText=SecureApiKeyStore.get(context,id).orEmpty();keyMessage=null},modifier=Modifier.fillMaxWidth()){Text("$label API Key ${if(SecureApiKeyStore.has(context,id))"(저장됨)" else "(미설정)"}")}}

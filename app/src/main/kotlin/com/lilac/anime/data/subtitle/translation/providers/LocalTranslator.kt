@@ -317,7 +317,7 @@ internal object LocalAiTranslationRuntime {
                     seed,
                     retryPrepared.nativeTemplateControl
                 ).orEmpty() }
-                parseSingleOutput(retry, cleanSource) ?: cleanSource
+                parseSingleOutput(retry, cleanSource) ?: throw IOException("로컬 모델이 유효한 번역문을 반환하지 않았습니다. 모델과 프롬프트를 확인하세요.")
             }
         }
     }

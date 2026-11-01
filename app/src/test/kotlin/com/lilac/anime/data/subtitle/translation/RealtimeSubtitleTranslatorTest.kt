@@ -34,6 +34,33 @@ class RealtimeSubtitleTranslatorTest {
         fun time(value: Int) = "%02d:%02d:%02d,000".format(value / 3600, value / 60 % 60, value % 60)
         "${i+1}\n${time(seconds)} --> ${time(seconds+1)}\nLine $i"
     }
+    @Test fun slowTranslationNeverRemovesPendingCuesFromNativeTrack() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val provider = Provider { lines -> gate.await(); lines.map { "한국어 $it" } }
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider })
+        val source = file(srt(40))
+        translator.playbackTick(source.path, 0, backgroundScope, "gemini")
+        val before = translator.nativeTrackSnapshot()!!
+        assertEquals(40, before.lines().count { it.startsWith("Dialogue:") })
+        assertTrue(before.contains("Line 39"))
+        runCurrent(); advanceTimeBy(20000)
+        assertNull(translator.nativeTrackSnapshot()) // No empty replacement during delay.
+        gate.complete(Unit); runCurrent()
+        val after = translator.nativeTrackSnapshot()!!
+        assertEquals(40, after.lines().count { it.startsWith("Dialogue:") })
+        assertTrue(after.contains("한국어 Line 0")); assertTrue(after.contains("Line 39"))
+        assertEquals(before.lines().filter { it.startsWith("Dialogue:") }.map { it.split(',').take(9) }, after.lines().filter { it.startsWith("Dialogue:") }.map { it.split(',').take(9) })
+        translator.clear()
+    }
+    @Test fun failedTranslationLeavesCompleteNativeTimeline() = runTest {
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider { error("HTTP 401") } }, { false })
+        translator.playbackTick(file(srt(8)).path, 0, backgroundScope, "gemini")
+        val original = translator.nativeTrackSnapshot()!!
+        advanceTimeBy(15000); runCurrent()
+        assertEquals(8, original.lines().count { it.startsWith("Dialogue:") })
+        assertNull(translator.nativeTrackSnapshot())
+        translator.clear()
+    }
     @Test fun playbackClockTranslatesFortyConsecutiveCuesWithoutNativeTextEvents() = runTest {
         val provider = Provider()
         val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider })

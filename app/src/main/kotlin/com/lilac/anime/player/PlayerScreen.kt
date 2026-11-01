@@ -378,9 +378,7 @@ fun PlayerScreen(
     }
 
     fun setSubtitleVisibleForMode(visible: Boolean) {
-        // Korean translation mode is rendered exclusively by the in-memory
-        // libass overlay. mpv must never display the source subtitle track.
-        engine.setSubtitleVisible(if (subtitleTranslationMode == "korean") false else visible)
+        engine.setSubtitleVisible(visible)
     }
 
     LaunchedEffect(vm.playerSettings.playbackAiMode, streamUrl, streamHeaders, streamReferer, currentEpisode.id, offlinePlaybackActive) {
@@ -540,38 +538,38 @@ fun PlayerScreen(
         )
     }
 
-    // One owner for the translation worker and renderer. Drive it from the
-    // playback clock even when the native subtitle track emits no text events.
+    // Feed complete subtitle snapshots to mpv's native renderer. Pending/failed
+    // translations retain the source cue instead of disappearing from the screen.
     LaunchedEffect(engine, currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider, localSubtitle) {
-        libassTranslationOverlay?.clear()
         if (subtitleTranslationMode != "korean") {
             setSubtitleVisibleForMode(subtitleEnabled)
             return@LaunchedEffect
         }
+        val source = localSubtitle ?: engine.currentSubtitleFilePath
+        val projected = File.createTempFile("translated-", ".ass", context.cacheDir)
         try {
             while (isActive) {
-                val source = engine.currentSubtitleFilePath ?: localSubtitle
-                val subtitlePositionMs = engine.currentPosition - subtitleSyncMs
-                val ready = realtimeTranslator.playbackTick(
-                    source, subtitlePositionMs, this, vm.playerSettings.translationProvider,
-                )
-                val overlay = libassTranslationOverlay
-                overlay?.setSource(source)
-                ready.forEach { event ->
-                    overlay?.addTranslatedEvent(event.assEventData, event.startMs, event.endMs)
+                realtimeTranslator.playbackTick(source, engine.currentPosition - subtitleSyncMs, this, vm.playerSettings.translationProvider)
+                realtimeTranslator.nativeTrackSnapshot()?.let { snapshot ->
+                    withContext(Dispatchers.IO) {
+                        val atomic = android.util.AtomicFile(projected)
+                        val stream = atomic.startWrite()
+                        try { stream.write(snapshot.toByteArray(Charsets.UTF_8)); atomic.finishWrite(stream) }
+                        catch (error: Throwable) { atomic.failWrite(stream); throw error }
+                    }
+                    if (engine.currentSubtitleFilePath == projected.absolutePath) engine.reloadCurrentSubtitle()
+                    else engine.replaceSubtitleTrack(projected.absolutePath)
                 }
-                val videoAspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
-                    ?: if (engine.videoWidth > 0 && engine.videoHeight > 0) {
-                        engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
-                    } else null
-                if (videoAspect != null) overlay?.setVideoAspectRatio(videoAspect)
-                overlay?.visibility = if (subtitleEnabled) android.view.View.VISIBLE else android.view.View.INVISIBLE
-                overlay?.sync(subtitlePositionMs, engine.isPlaying, if (boostActive) 2f else speed)
-                setSubtitleVisibleForMode(false)
+                engine.setSubtitleVisible(subtitleEnabled)
                 delay(100L)
             }
         } finally {
+            if (engine.currentSubtitleFilePath == projected.absolutePath && source != null) {
+                engine.replaceSubtitleTrack(source)
+                engine.setSubtitleVisible(subtitleEnabled)
+            }
             withContext(NonCancellable) { realtimeTranslator.clear() }
+            projected.delete()
         }
     }
 
@@ -1954,42 +1952,6 @@ fun PlayerScreen(
                 view.onPlaybackFocusLost = { spaceController.up(cancelled = true) }
                 view.onBoostChanged = { active -> boostActive = active; engine.setSpeed(if (active) 2f else speed) }
                 view.seekSeconds = vm.playerSettings.doubleTapSeekSeconds.coerceAtLeast(0L)
-            }
-        )
-        }
-
-        // Translated ASS events are rendered directly by libass in memory.
-        // This view never becomes an mpv subtitle track and never causes
-        // sub-add/sub-remove/sub-reload during translation.
-        key(engine) {
-            AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                LibassTranslationOverlay(ctx).also { view ->
-                    libassTranslationOverlay = view
-                    view.setSubtitleScale(subtitleSize)
-                    view.setSource(engine.currentSubtitleFilePath ?: localSubtitle)
-                    val aspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
-                        ?: if (engine.videoDisplayWidth > 0 && engine.videoDisplayHeight > 0) {
-                            engine.videoDisplayWidth.toDouble() / engine.videoDisplayHeight.toDouble()
-                        } else if (engine.videoWidth > 0 && engine.videoHeight > 0) {
-                            engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
-                        } else null
-                    if (aspect != null) view.setVideoAspectRatio(aspect)
-                    view.sync(engine.currentPosition - subtitleSyncMs, engine.isPlaying, if (boostActive) 2f else speed)
-                }
-            },
-            update = { view ->
-                libassTranslationOverlay = view
-                view.setSubtitleScale(subtitleSize)
-                val aspect = engine.videoDisplayAspect.takeIf { it > 0.01 }
-                    ?: if (engine.videoDisplayWidth > 0 && engine.videoDisplayHeight > 0) {
-                        engine.videoDisplayWidth.toDouble() / engine.videoDisplayHeight.toDouble()
-                    } else if (engine.videoWidth > 0 && engine.videoHeight > 0) {
-                        engine.videoWidth.toDouble() / engine.videoHeight.toDouble()
-                    } else null
-                if (aspect != null) view.setVideoAspectRatio(aspect)
-                view.sync(engine.currentPosition - subtitleSyncMs, engine.isPlaying, if (boostActive) 2f else speed)
             }
         )
         }

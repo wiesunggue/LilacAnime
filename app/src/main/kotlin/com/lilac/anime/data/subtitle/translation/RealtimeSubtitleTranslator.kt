@@ -62,6 +62,31 @@ class RealtimeSubtitleTranslator(
         val assEventData: String,
     )
 
+    private var projectionStamp: Pair<Int, Int>? = null
+
+    /** Full timeline, including original text for pending/failed cues. Like mpv
+     * subtrans, publish only changed snapshots and let mpv own rendering/time. */
+    suspend fun nativeTrackSnapshot(): String? = lock.withLock {
+        val content = sourceContent ?: return@withLock null
+        if (cues.isEmpty()) return@withLock null
+        val stamp = generation to cache.hashCode()
+        if (projectionStamp == stamp) return@withLock null
+        val assSource = cues.any { it.kind == "ass" || it.kind == "ssa" }
+        val header = if (assSource) content.lineSequence()
+            .filterNot { it.trimStart().startsWith("Dialogue:", true) || it.trimStart().startsWith("Comment:", true) }
+            .joinToString("\n") else NATIVE_HEADER
+        val result = buildString {
+            append(header.trimEnd()); append('\n')
+            for (cue in cues) {
+                val translated = cache[cueCacheKey(cue)]
+                val text = if (translated == null) (if (assSource) cue.text else SubtitleMarkup.plainText(cue.text)) else restoreTags(cue.text, translated, cue.kind)
+                append("Dialogue: "); append(buildAssEventData(content, cue, text)); append('\n')
+            }
+        }
+        projectionStamp = stamp
+        result
+    }
+
     private suspend fun prepare(
         path: String?,
         positionMs: Long,
@@ -881,3 +906,16 @@ class RealtimeSubtitleTranslator(
         private const val TAG = "RealtimeSubtitleTranslator"
     }
 }
+
+private const val NATIVE_HEADER = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,sans-serif,48,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,60,60,60,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""

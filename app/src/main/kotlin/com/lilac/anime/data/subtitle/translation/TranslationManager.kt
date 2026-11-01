@@ -202,7 +202,7 @@ object TranslationManager {
             } else {
                 val result = createProvider(context, providerId).translateBatch(listOf(text))
                 val translated = result.firstOrNull()?.trim()?.takeIf { it.isNotBlank() } ?: error("번역 결과가 비어 있습니다.")
-                if (providerId != "local" && translated == text.trim()) error("API 요청은 성공했지만 번역 결과가 원문과 같습니다. 모델/프롬프트 응답을 확인하세요.")
+                if (translated == text.trim()) error("API 요청은 성공했지만 번역 결과가 원문과 같습니다. 모델/프롬프트 응답을 확인하세요.")
                 translated
             }
         }
