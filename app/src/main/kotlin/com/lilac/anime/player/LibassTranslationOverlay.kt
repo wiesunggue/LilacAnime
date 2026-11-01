@@ -55,6 +55,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     private var renderer: AssRender? = null
     private var bitmap: Bitmap? = null
     private var sourcePath: String? = null
+    private var sourceStamp: Pair<Long, Long>? = null
     private var widthPx = 0
     private var heightPx = 0
     private var playing = false
@@ -108,10 +109,12 @@ class LibassTranslationOverlay @JvmOverloads constructor(
             ?.removePrefix("file://")
             ?.takeIf { File(it).isFile }
             ?.let { File(it).absolutePath }
-        if (normalized == sourcePath && isReady()) return
+        val stamp = normalized?.let { File(it).let { file -> file.lastModified() to file.length() } }
+        if (normalized == sourcePath && sourceStamp == stamp && isReady()) return
 
         releaseLibass()
         sourcePath = normalized
+        sourceStamp = stamp
         events.clear()
         eventKeys.clear()
         hasRenderedFrame = false
@@ -210,6 +213,7 @@ class LibassTranslationOverlay @JvmOverloads constructor(
     fun clear() {
         releaseLibass()
         sourcePath = null
+        sourceStamp = null
         events.clear()
         eventKeys.clear()
         hasRenderedFrame = false

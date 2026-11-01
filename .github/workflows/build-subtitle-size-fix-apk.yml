@@ -239,7 +239,8 @@ jobs:
           profile: pixel_2
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon
+          script: |
+            gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon || { adb logcat -d -s RealtimeSubtitleTranslator:V LibassTranslationOverlay:V LilacMpv:V AndroidRuntime:E; exit 1; }
 
       - name: Upload Android functional test reports
         if: always()

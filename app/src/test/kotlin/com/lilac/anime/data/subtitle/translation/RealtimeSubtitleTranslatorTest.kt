@@ -128,4 +128,37 @@ class RealtimeSubtitleTranslatorTest {
         assertTrue(events.all { !it.assEventData.contains("<font") && it.assEventData.contains("안녕") })
         translator.clear()
     }
+    @Test fun replacingContentsAtTheSamePathInvalidatesOldTranslations() = runTest {
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        val source = file(srt(1))
+        translator.playbackTick(source.path, 0, backgroundScope, "gemini"); runCurrent()
+        assertEquals(1, translator.consumeReadyTranslatedEvents().size)
+        source.writeText(srt(3))
+        translator.playbackTick(source.path, 4000, backgroundScope, "gemini"); advanceTimeBy(200); runCurrent()
+        val ready = translator.consumeReadyTranslatedEvents()
+        assertEquals(1, ready.size)
+        assertEquals(4000L, ready.single().startMs)
+        translator.clear()
+    }
+
+    @Test fun utf16SrtAndAssDialogueBothKeepTheirTimeline() = runTest {
+        context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", 4).commit()
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        val utf16 = file("").apply { writeBytes(srt(3).toByteArray(Charsets.UTF_16)) }
+        translator.playbackTick(utf16.path, 0, backgroundScope, "gemini"); advanceTimeBy(200); runCurrent()
+        assertEquals(3, translator.consumeReadyTranslatedEvents().size)
+        val ass = file("""[Script Info]
+ScriptType: v4.00+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello
+Dialogue: 1,0:00:02.50,0:00:04.00,Default,,0,0,0,,World
+""", "vtt")
+        translator.playbackTick(ass.path, 0, backgroundScope, "gemini"); advanceTimeBy(200); runCurrent()
+        val events = translator.consumeReadyTranslatedEvents()
+        assertEquals(listOf(1000L, 2500L), events.map { it.startMs })
+        assertEquals(listOf(2000L, 4000L), events.map { it.endMs })
+        translator.clear()
+    }
+
 }

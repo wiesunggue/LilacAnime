@@ -50,6 +50,7 @@ class RealtimeSubtitleTranslator(
     private var cues: List<Cue> = emptyList()
     private var sourceContent: String? = null
     private var sourcePath: String? = null
+    private var sourceStamp: Pair<Long, Long>? = null
     private var worker: Job? = null
     private var prefetchPositionMs: Long = 0L
     private var generation = 0
@@ -108,6 +109,7 @@ class RealtimeSubtitleTranslator(
             cache.clear()
             sourceContent = content
             sourcePath = file.absolutePath
+            sourceStamp = file.lastModified() to file.length()
             cues = parsed
             prefetchPositionMs = positionMs.coerceAtLeast(0L)
         }
@@ -150,9 +152,11 @@ class RealtimeSubtitleTranslator(
                 if (sourcePath != null) clearSession()
                 return@withLock
             }
+        val currentFile = File(normalized)
+        val stamp = currentFile.lastModified() to currentFile.length()
         val wantedProvider = providerId.trim().lowercase().ifBlank { "local" }
         val alreadyPrepared = lock.withLock {
-            sourcePath == normalized &&
+            sourcePath == normalized && sourceStamp == stamp &&
                 requestedProviderId == wantedProvider &&
                 sourceContent != null && worker?.isActive == true
         }
@@ -185,6 +189,7 @@ class RealtimeSubtitleTranslator(
             cues = emptyList()
             sourceContent = null
             sourcePath = null
+            sourceStamp = null
             prefetchPositionMs = 0L
             old
         }

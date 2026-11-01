@@ -2,6 +2,7 @@ package com.lilac.anime.player
 
 import android.graphics.drawable.BitmapDrawable
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.lilac.anime.data.subtitle.translation.*
 import kotlinx.coroutines.*
@@ -30,8 +31,10 @@ class SubtitleRenderingTest {
         val translator = RealtimeSubtitleTranslator(context, providerFactory = { provider })
         val workers = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         lateinit var overlay: LibassTranslationOverlay
-        instrumentation.runOnMainSync {
-            overlay = LibassTranslationOverlay(context)
+        val scenario = ActivityScenario.launch(SubtitleTestActivity::class.java)
+        scenario.onActivity { activity ->
+            overlay = LibassTranslationOverlay(activity)
+            activity.setContentView(overlay)
             overlay.layout(0, 0, 960, 540)
             overlay.setSource(source.path)
             assertTrue("Native libass initialization failed", overlay.isReady())
@@ -40,13 +43,15 @@ class SubtitleRenderingTest {
             for (i in (0 until 30).toList() + listOf(0, 15, 29)) {
                 val position = i * 2000L + 100
                 translator.playbackTick(source.path, position, workers, "gemini")
-                val events = withTimeout(5000) {
+                val events = try { withTimeout(5000) {
                     var ready = translator.consumeReadyTranslatedEvents()
                     while (ready.none { position in it.startMs until it.endMs }) {
                         delay(25)
                         ready = translator.consumeReadyTranslatedEvents()
                     }
                     ready
+                } } catch (error: Exception) {
+                    throw AssertionError("Timed out at cue $i / position $position; completed=${translator.consumeReadyTranslatedEvents().map { it.startMs }}", error)
                 }
                 instrumentation.runOnMainSync {
                     events.forEach { overlay.addTranslatedEvent(it.assEventData, it.startMs, it.endMs) }
@@ -66,6 +71,7 @@ class SubtitleRenderingTest {
         } finally {
             translator.clear(); workers.cancel()
             instrumentation.runOnMainSync { overlay.clear() }
+            scenario.close()
             source.delete()
         }
     }

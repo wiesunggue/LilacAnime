@@ -21,6 +21,9 @@ import com.lilac.anime.viewmodel.*
 import android.content.Context
 import android.util.Log
 import android.webkit.CookieManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -66,6 +69,7 @@ suspend fun downloadSubtitleFile(
 
     for ((candidateRef, sendOrigin) in attempts) {
         try {
+            currentCoroutineContext().ensureActive()
             val candidateOrigin = if (sendOrigin) candidateRef?.let { refValue ->
                 runCatching {
                     java.net.URI(refValue).let { "${it.scheme}://${it.host}" }
@@ -126,14 +130,23 @@ suspend fun downloadSubtitleFile(
                     vttUrl,
                     extension
                 )
-                val file = File(context.filesDir, "sub_${animeId}_ep_${safeKey}_${safeSource}.$extension")
+                currentCoroutineContext().ensureActive()
+                // Different languages/tracks from one provider must not overwrite
+                // the file already being parsed/rendered by the current session.
+                val trackHash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(vttUrl.toByteArray(Charsets.UTF_8)).take(8)
+                    .joinToString("") { "%02x".format(it) }
+                val file = File(context.filesDir, "sub_${animeId}_ep_${safeKey}_${safeSource}_$trackHash.$extension")
                 file.writeBytes(payload)
                 SubtitleStore.setDisplayName(context, file.absolutePath, remoteName)
 
                 Log.d("Subtitle", "REMOTE_SUBTITLE_SAVED source=$source path=${file.absolutePath} displayName=$remoteName bytes=${file.length()} referer=$candidateRef")
                 return@withContext file.absolutePath
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
             Log.w("Subtitle", "REMOTE_SUBTITLE_ATTEMPT_FAILED source=$source referer=$candidateRef url=$vttUrl", e)
         }
     }

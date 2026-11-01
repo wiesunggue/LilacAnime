@@ -1038,83 +1038,84 @@ fun PlayerScreen(
         subtitleSelectionNeedsUserChoice = true
         initialTranslationMode = "original"
         initialSubtitleRequest.start {
-        try {
-        val generation = playbackGeneration
-        val offlineVideoExists = withContext(Dispatchers.IO) {
-            MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number, currentEpisode.displayNumber)
-                ?.let { File(it).isFile && File(it).length() > 0L } == true
-        }
-        val koreanTitle = withContext(Dispatchers.IO) { SubtitleTitleResolver.resolve(context, anime) }
-        checkActive()
-        initialSubtitleTitle = koreanTitle
-        val discovered = runCatching {
-            if (offlineVideoExists) {
-                withContext(Dispatchers.IO) {
-                    SubtitleStore.list(context, anime.id, currentEpisode.displayNumber, currentEpisode.number)
-                        .filter { !it.ignored && it.episodeMatch && File(it.path).isFile }
-                }.map { saved ->
-                    val source = when (saved.source.lowercase(Locale.ROOT)) {
-                        "jimaku" -> SubtitleDiscoveryService.Source.JIMAKU
-                        "reanime" -> SubtitleDiscoveryService.Source.REANIME
-                        "anissia" -> SubtitleDiscoveryService.Source.ANISSIA
-                        "kairan", "csora" -> SubtitleDiscoveryService.Source.CACHED
-                        "linkkf" -> SubtitleDiscoveryService.Source.LINKKF
-                        else -> SubtitleDiscoveryService.Source.CACHED
-                    }
-                    SubtitleDiscoveryService.Choice(
-                        source = source,
-                        label = when (source) {
-                            SubtitleDiscoveryService.Source.ANISSIA -> "Anissia"
-                            SubtitleDiscoveryService.Source.JIMAKU -> "Jimaku"
-                            SubtitleDiscoveryService.Source.REANIME -> "Re:Anime"
-                            SubtitleDiscoveryService.Source.LINKKF -> "Linkkf"
-                            SubtitleDiscoveryService.Source.CACHED -> "저장됨"
-                        },
-                        language = if (source == SubtitleDiscoveryService.Source.ANISSIA) "한국어" else "원문",
-                        title = File(saved.path).name,
-                        path = saved.path
-                    )
+            try {
+                val generation = playbackGeneration
+                val offlineVideoExists = withContext(Dispatchers.IO) {
+                    MpvOfflineStore.completedPathForEpisode(context, anime.id, currentEpisode.id, currentEpisode.number, currentEpisode.displayNumber)
+                        ?.let { File(it).isFile && File(it).length() > 0L } == true
                 }
-            } else SubtitleDiscoveryService.discover(
-                context = context,
-                anime = anime,
-                episode = currentEpisode,
-                koreanTitle = koreanTitle,
-                linkkfSubtitleUrl = subtitleUrl,
-                reAnimeTracks = reAnimeSubtitleTracks
-            )
-        }.getOrElse {
-            if (it is CancellationException) throw it
-            Log.w("SubtitleDiscovery", "DISCOVERY_FAILED", it)
-            emptyList()
-        }
-        checkActive()
-        if (generation != playbackGeneration) return@start
-        initialSubtitleChoices = (discovered + initialSubtitleChoices).distinctBy { it.key }
-        subtitleDiscoveryLoading = false
-        val storedProfile = withContext(Dispatchers.IO) { SubtitleSelectionStore.load(context, anime.id) }
-        checkActive()
-        val matched = discovered.filter { SubtitleSelectionStore.matches(it, storedProfile) }.take(1)
-        selectedInitialSubtitleKeys = matched.map { it.key }.toSet()
-        subtitleSelectionNeedsUserChoice = storedProfile.isNotEmpty() && matched.isEmpty()
-        if (matched.isEmpty()) selectedInitialSubtitleKeys = discovered.firstOrNull()?.let { setOf(it.key) }.orEmpty()
-        if (discovered.isEmpty()) {
-            subtitleSelectionOpen = false
-            if (engine.playbackState == MpvPlayerEngine.STATE_READY) {
-                engine.play()
-                MainActivity.isVideoPlaying = true
+                val koreanTitle = withContext(Dispatchers.IO) { SubtitleTitleResolver.resolve(context, anime) }
+                checkActive()
+                initialSubtitleTitle = koreanTitle
+                val discovered = runCatching {
+                    if (offlineVideoExists) {
+                        withContext(Dispatchers.IO) {
+                            SubtitleStore.list(context, anime.id, currentEpisode.displayNumber, currentEpisode.number)
+                                .filter { !it.ignored && it.episodeMatch && File(it.path).isFile }
+                        }.map { saved ->
+                            val source = when (saved.source.lowercase(Locale.ROOT)) {
+                                "jimaku" -> SubtitleDiscoveryService.Source.JIMAKU
+                                "reanime" -> SubtitleDiscoveryService.Source.REANIME
+                                "anissia" -> SubtitleDiscoveryService.Source.ANISSIA
+                                "kairan", "csora" -> SubtitleDiscoveryService.Source.CACHED
+                                "linkkf" -> SubtitleDiscoveryService.Source.LINKKF
+                                else -> SubtitleDiscoveryService.Source.CACHED
+                            }
+                            SubtitleDiscoveryService.Choice(
+                                source = source,
+                                label = when (source) {
+                                    SubtitleDiscoveryService.Source.ANISSIA -> "Anissia"
+                                    SubtitleDiscoveryService.Source.JIMAKU -> "Jimaku"
+                                    SubtitleDiscoveryService.Source.REANIME -> "Re:Anime"
+                                    SubtitleDiscoveryService.Source.LINKKF -> "Linkkf"
+                                    SubtitleDiscoveryService.Source.CACHED -> "저장됨"
+                                },
+                                language = if (source == SubtitleDiscoveryService.Source.ANISSIA) "한국어" else "원문",
+                                title = File(saved.path).name,
+                                path = saved.path
+                            )
+                        }
+                    } else SubtitleDiscoveryService.discover(
+                        context = context,
+                        anime = anime,
+                        episode = currentEpisode,
+                        koreanTitle = koreanTitle,
+                        linkkfSubtitleUrl = subtitleUrl,
+                        reAnimeTracks = reAnimeSubtitleTracks
+                    )
+                }.getOrElse {
+                    if (it is CancellationException) throw it
+                    Log.w("SubtitleDiscovery", "DISCOVERY_FAILED", it)
+                    emptyList()
+                }
+                checkActive()
+                if (generation != playbackGeneration) return@start
+                initialSubtitleChoices = (discovered + initialSubtitleChoices).distinctBy { it.key }
+                subtitleDiscoveryLoading = false
+                val storedProfile = withContext(Dispatchers.IO) { SubtitleSelectionStore.load(context, anime.id) }
+                checkActive()
+                val available = initialSubtitleChoices
+                val matched = available.filter { SubtitleSelectionStore.matches(it, storedProfile) }.take(1)
+                selectedInitialSubtitleKeys = matched.map { it.key }.toSet()
+                subtitleSelectionNeedsUserChoice = storedProfile.isNotEmpty() && matched.isEmpty()
+                if (matched.isEmpty()) selectedInitialSubtitleKeys = available.firstOrNull()?.let { setOf(it.key) }.orEmpty()
+                if (available.isEmpty()) {
+                    subtitleSelectionOpen = false
+                    if (engine.playbackState == MpvPlayerEngine.STATE_READY) {
+                        engine.play()
+                        MainActivity.isVideoPlaying = true
+                    }
+                } else if (storedProfile.isNotEmpty() && !subtitleSelectionNeedsUserChoice) {
+                    startInitialSubtitlePlayback(matched)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                checkActive()
+                subtitleRequestError = "자막 검색 실패: ${error.message}"
+            } finally {
+                if (isCurrent) subtitleDiscoveryLoading = false
             }
-        } else if (storedProfile.isNotEmpty() && !subtitleSelectionNeedsUserChoice) {
-            startInitialSubtitlePlayback(matched)
-        }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            checkActive()
-            subtitleRequestError = "자막 검색 실패: ${error.message}"
-        } finally {
-            if (isCurrent) subtitleDiscoveryLoading = false
-        }
         }
     }
 
@@ -2155,7 +2156,7 @@ fun PlayerScreen(
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                                         listOf("linkkf" to "Linkkf", "reanime" to "Re:Anime", "jimaku" to "Jimaku", "anissia" to "Anissia", "user" to "사용자").forEach { (source, label) ->
                                             val selected = subtitleSource == source
-                                            Surface(onClick = { subtitleSource = source; vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSourcePreference = source)); if (source == "jimaku") openJimakuSubtitlePicker() else if (source == "anissia") openAnissiaSubtitlePicker() else playerScope.launch { val path = if (source == "user") resolveCachedSubtitle(currentEpisode, "user") else withContext(Dispatchers.IO) { SubtitleStore.get(context, anime.id, currentEpisode.id, currentEpisode.number, source) }; if (!path.isNullOrBlank() && File(path).isFile) { localSubtitle = path; engine.replaceSubtitleTrack(path); engine.setSubtitleDelay(subtitleSyncMs); setSubtitleVisibleForMode(subtitleEnabled) } } }, modifier = Modifier.focusable(), shape = RoundedCornerShape(12.dp), color = if (selected) Color(0xFF303A25) else Color.White.copy(.08f), border = BorderStroke(1.dp, if (selected) Color.White else Color.Transparent)) {
+                                            Surface(onClick = { cancelManualSubtitleRequest(); subtitleSource = source; vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSourcePreference = source)); if (source == "jimaku") openJimakuSubtitlePicker() else if (source == "anissia") openAnissiaSubtitlePicker() else playerScope.launch { val path = if (source == "user") resolveCachedSubtitle(currentEpisode, "user") else withContext(Dispatchers.IO) { SubtitleStore.get(context, anime.id, currentEpisode.id, currentEpisode.number, source) }; if (!path.isNullOrBlank() && File(path).isFile) { localSubtitle = path; engine.replaceSubtitleTrack(path); engine.setSubtitleDelay(subtitleSyncMs); setSubtitleVisibleForMode(subtitleEnabled) } } }, modifier = Modifier.focusable(), shape = RoundedCornerShape(12.dp), color = if (selected) Color(0xFF303A25) else Color.White.copy(.08f), border = BorderStroke(1.dp, if (selected) Color.White else Color.Transparent)) {
                                                 Text(label, color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp))
                                             }
                                         }
@@ -2689,6 +2690,7 @@ fun PlayerScreen(
                                 ).forEach { (source, label) ->
                                     Surface(
                                         onClick = {
+                                            cancelManualSubtitleRequest()
                                             subtitleSource = source
                                             vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSourcePreference = source))
                                             if (source == "jimaku") {
@@ -2965,18 +2967,16 @@ fun PlayerScreen(
                                                                 if (anissiaSubtitleLoading) return@clickable
                                                                 anissiaSubtitleLoading = true
                                                                 manualSubtitleRequest.start {
-                                                                    val title = SubtitleTitleResolver.resolve(context, anime)
-                                                                    // Download/apply the subtitle without forcing a pause. Some engines report
-                                                                    // stale isPlaying state around subtitle-track replacement; the old pause/play
-                                                                    // pair could leave playback stopped after selecting an Anissia subtitle.
                                                                     try {
+                                                                        val title = SubtitleTitleResolver.resolve(context, anime)
+                                                                        checkActive()
                                                                         val downloaded = AnissiaSubtitleService.downloadSelectedSubtitle(
                                                                             context, title, currentEpisode.number, currentEpisode.id, anime.id, option
                                                                         )
                                                                         checkActive()
-                                                                    if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
+                                                                        if (!downloaded.isNullOrBlank() && File(downloaded).isFile) {
                                                                             subtitleEnabled = true
-                                                                        localSubtitle = downloaded
+                                                                            localSubtitle = downloaded
                                                                             engine.replaceSubtitleTrack(downloaded)
                                                                             engine.setSubtitleDelay(subtitleSyncMs)
                                                                             setSubtitleVisibleForMode(subtitleEnabled)
@@ -2984,8 +2984,6 @@ fun PlayerScreen(
                                                                             vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSourcePreference = "anissia"))
                                                                             savedSubtitles = SubtitleStore.list(context, anime.id, currentEpisode.id, currentEpisode.number)
                                                                             anissiaSubtitlePickerOpen = false
-                                                                            // Selecting an Anissia subtitle should leave the video playable,
-                                                                            // even if the playback engine briefly transitioned to paused.
                                                                             Toast.makeText(context, "${option.creator.ifBlank { "Anissia" }} 자막을 적용했습니다.", Toast.LENGTH_SHORT).show()
                                                                         } else {
                                                                             Toast.makeText(context, "선택한 Anissia 자막을 불러오지 못했습니다.", Toast.LENGTH_SHORT).show()
