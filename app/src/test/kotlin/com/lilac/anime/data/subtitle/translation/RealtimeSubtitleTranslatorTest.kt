@@ -34,6 +34,15 @@ class RealtimeSubtitleTranslatorTest {
         fun time(value: Int) = "%02d:%02d:%02d,000".format(value / 3600, value / 60 % 60, value % 60)
         "${i+1}\n${time(seconds)} --> ${time(seconds+1)}\nLine $i"
     }
+    @Test fun pausedSeekNearPreviousCueEndTranslatesCurrentCue() = runTest {
+        val source = file("1\n00:00:03,000 --> 00:00:03,900\nOld\n\n2\n00:00:04,000 --> 00:00:04,900\nCurrent")
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        translator.playbackTick(source.path, 4100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        assertTrue(translator.consumeReadyTranslatedEvents().any { it.startMs == 4000L })
+        assertFalse(translator.consumeReadyTranslatedEvents().any { it.startMs == 3000L })
+        translator.clear()
+    }
     @Test fun nativeAssSnapshotPreservesUntranslatedEventsAndStyles() = runTest {
         val content = "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
             "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,...\n" +

@@ -285,9 +285,9 @@ class RealtimeSubtitleTranslator(
                 compareBy<Cue> { it.startMs }.thenBy { it.endMs }.thenBy { it.index },
             )
 
-            // Anchor on cue end time, not cue start time. This includes a cue
-            // that is already on screen when Korean translation is enabled.
-            val currentIndex = ordered.indexOfFirst { it.endMs >= position - 250L }
+            // Choose an active or upcoming cue. A grace window behind the clock
+            // selects an expired cue and can stall forever while paused with no look-ahead.
+            val currentIndex = ordered.indexOfFirst { it.endMs > position }
                 .let { if (it < 0) ordered.lastIndex.coerceAtLeast(0) else it }
 
             // Rewind prefetch after a backwards seek. The previous monotonic
