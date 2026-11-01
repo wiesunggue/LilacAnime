@@ -73,14 +73,24 @@ class RealtimeSubtitleTranslator(
         val stamp = generation to cache.hashCode()
         if (projectionStamp == stamp) return@withLock null
         val assSource = cues.any { it.kind == "ass" || it.kind == "ssa" }
-        val header = if (assSource) content.lineSequence()
-            .filterNot { it.trimStart().startsWith("Dialogue:", true) || it.trimStart().startsWith("Comment:", true) }
-            .joinToString("\n") else NATIVE_HEADER
-        val result = buildString {
-            append(header.trimEnd()); append('\n')
+        val result = if (assSource) {
+            // Preserve untranslatable drawings, punctuation, comments and styles.
+            // cue.index is the original Dialogue ordinal, not the filtered list index.
+            val byOrdinal = cues.associateBy { it.index }
+            var ordinal = 0
+            content.lineSequence().joinToString("\n") { line ->
+                if (!line.trimStart().startsWith("Dialogue:", true)) line else {
+                    val cue = byOrdinal[ordinal++]
+                    val translated = cue?.let { cache[cueCacheKey(it)] }
+                    if (cue == null || translated == null) line
+                    else "Dialogue: " + buildAssEventData(content, cue, restoreTags(cue.text, translated, cue.kind))
+                }
+            }
+        } else buildString {
+            append(NATIVE_HEADER.trimEnd()); append('\n')
             for (cue in cues) {
                 val translated = cache[cueCacheKey(cue)]
-                val text = if (translated == null) (if (assSource) cue.text else SubtitleMarkup.plainText(cue.text)) else restoreTags(cue.text, translated, cue.kind)
+                val text = if (translated == null) SubtitleMarkup.plainText(cue.text) else restoreTags(cue.text, translated, cue.kind)
                 append("Dialogue: "); append(buildAssEventData(content, cue, text)); append('\n')
             }
         }

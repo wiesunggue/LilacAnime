@@ -348,12 +348,6 @@ fun PlayerScreen(
         MainActivity.isVideoPlaying = true
     }
     var realtimeSubtitleText by remember { mutableStateOf("") }
-    var libassTranslationOverlay by remember { mutableStateOf<LibassTranslationOverlay?>(null) }
-
-    LaunchedEffect(subtitleSize, libassTranslationOverlay) {
-        libassTranslationOverlay?.setSubtitleScale(subtitleSize)
-    }
-
     fun subtitlePreferencePrefs() = context.getSharedPreferences("lilac_subtitle_preferences", Context.MODE_PRIVATE)
     fun subtitleTrackKey(track: SubtitleTrack): String = "${track.language.trim().lowercase(Locale.ROOT)}|${track.label.trim().lowercase(Locale.ROOT)}"
 
@@ -415,7 +409,7 @@ fun PlayerScreen(
                 engine.setSubtitleDelay(vm.playerSettings.syncOffsetMs)
                 // The generated Japanese SRT enters the same existing translation pipeline as downloaded subtitles.
                 subtitleTranslationMode = "korean"
-                setSubtitleVisibleForMode(false)
+                setSubtitleVisibleForMode(subtitleEnabled)
                 Log.i("LilacWhisper", "GENERATED_SUBTITLE_ATTACHED episode=$episodeKey path=${subtitleFile.absolutePath}")
             }
         }.onFailure {
@@ -2713,7 +2707,7 @@ fun PlayerScreen(
                                             } else {
                                                 // LaunchedEffect owns translator lifecycle. Do not call prepare here as
                                                 // well, or the same episode starts two competing prefetch sessions.
-                                                setSubtitleVisibleForMode(false)
+                                                setSubtitleVisibleForMode(subtitleEnabled)
                                             }
                                         },
                                         shape = RoundedCornerShape(8.dp),

@@ -34,6 +34,19 @@ class RealtimeSubtitleTranslatorTest {
         fun time(value: Int) = "%02d:%02d:%02d,000".format(value / 3600, value / 60 % 60, value % 60)
         "${i+1}\n${time(seconds)} --> ${time(seconds+1)}\nLine $i"
     }
+    @Test fun nativeAssSnapshotPreservesUntranslatedEventsAndStyles() = runTest {
+        val content = "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+            "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,...\n" +
+            "Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,Hello"
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        translator.playbackTick(file(content, "ass").path, 2100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        val snapshot = translator.nativeTrackSnapshot()!!
+        assertTrue(snapshot.contains("Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,..."))
+        assertTrue(snapshot.contains("번역 Hello"))
+        assertEquals(2, snapshot.lines().count { it.startsWith("Dialogue:") })
+        translator.clear()
+    }
     @Test fun slowTranslationNeverRemovesPendingCuesFromNativeTrack() = runTest {
         val gate = CompletableDeferred<Unit>()
         val provider = Provider { lines -> gate.await(); lines.map { "한국어 $it" } }

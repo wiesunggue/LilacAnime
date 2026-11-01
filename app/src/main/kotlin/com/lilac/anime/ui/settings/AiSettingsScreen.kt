@@ -64,11 +64,8 @@ fun AiSettingsScreen(vm: AnimeViewModel, onNavigate: (String) -> Unit) {
     var received by remember { mutableStateOf(0L) }
     var total by remember { mutableStateOf(0L) }
     var expandedRuntime by remember { mutableStateOf<String?>(null) }
-    var testText by remember { mutableStateOf("こんにちは、今日はいい天気ですね。") }
-    var testResult by remember { mutableStateOf<String?>(null) }
     var latestAiError by remember { mutableStateOf(AiRuntimeDiagnostics.latest(context)) }
     var showAiErrorDetails by remember { mutableStateOf(false) }
-    var testing by remember { mutableStateOf(false) }
     var keyProvider by remember { mutableStateOf<String?>(null) }
     var keyText by remember { mutableStateOf("") }
     var keyMessage by remember { mutableStateOf<String?>(null) }
