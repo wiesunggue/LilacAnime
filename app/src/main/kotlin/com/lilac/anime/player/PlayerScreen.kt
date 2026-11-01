@@ -556,6 +556,13 @@ fun PlayerScreen(
                     if (engine.currentSubtitleFilePath == projected.absolutePath) engine.reloadCurrentSubtitle()
                     else engine.replaceSubtitleTrack(projected.absolutePath)
                 }
+                // FILE_LOADED can attach the original after the first snapshot
+                // was published. Reattach the completed snapshot without waiting
+                // for another API response or rewriting an unchanged file.
+                if (projected.length() > 0L && engine.playbackState == MpvPlayerEngine.STATE_READY &&
+                    engine.currentSubtitleFilePath != projected.absolutePath) {
+                    engine.replaceSubtitleTrack(projected.absolutePath)
+                }
                 engine.setSubtitleVisible(subtitleEnabled)
                 delay(100L)
             }
