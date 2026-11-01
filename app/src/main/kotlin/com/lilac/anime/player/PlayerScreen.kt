@@ -549,7 +549,9 @@ fun PlayerScreen(
         val projected = File.createTempFile("translated-", ".ass", context.cacheDir)
         try {
             while (isActive) {
-                realtimeTranslator.playbackTick(source, engine.currentPosition - subtitleSyncMs, this, vm.playerSettings.translationProvider)
+                val subtitleTime = engine.currentPosition - subtitleSyncMs
+                realtimeTranslator.ensurePrepared(source, subtitleTime, this, vm.playerSettings.translationProvider)
+                realtimeTranslator.updatePlaybackPosition(subtitleTime)
                 realtimeTranslator.nativeTrackSnapshot()?.let { snapshot ->
                     withContext(Dispatchers.IO) {
                         val atomic = android.util.AtomicFile(projected)
@@ -2696,6 +2698,7 @@ fun PlayerScreen(
 
                             Spacer(Modifier.height(10.dp))
                             Text("선택한 파일 표시 방식", color = Color.White.copy(.72f), fontSize = 11.sp)
+                            Text("번역이 준비되지 않은 대사는 원문을 표시하며, 완료되면 번역으로 바뀝니다.", color = Color.White.copy(.65f), fontSize = 10.sp)
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp)

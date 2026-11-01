@@ -49,6 +49,7 @@ class RealtimeSubtitleTranslator(
     private val cache = LinkedHashMap<String, String>(256, 0.75f, true)
     private var cues: List<Cue> = emptyList()
     private var sourceContent: String? = null
+    private var sourceDialogueBodies: List<List<String>> = emptyList()
     private var sourcePath: String? = null
     private var sourceStamp: Pair<Long, Long>? = null
     private var worker: Job? = null
@@ -66,7 +67,7 @@ class RealtimeSubtitleTranslator(
 
     /** Full timeline, including original text for pending/failed cues. Like mpv
      * subtrans, publish only changed snapshots and let mpv own rendering/time. */
-    suspend fun nativeTrackSnapshot(): String? = lock.withLock {
+    suspend fun nativeTrackSnapshot(): String? = withContext(dispatcher) { lock.withLock {
         val content = sourceContent ?: return@withLock null
         if (cues.isEmpty()) return@withLock null
         val stamp = generation to cache.hashCode()
@@ -85,7 +86,7 @@ class RealtimeSubtitleTranslator(
         }
         projectionStamp = stamp
         result
-    }
+    } }
 
     private suspend fun prepare(
         path: String?,
@@ -114,6 +115,10 @@ class RealtimeSubtitleTranslator(
             return
         }
 
+        val dialogueBodies = withContext(dispatcher) {
+            content.lineSequence().filter { it.trimStart().startsWith("Dialogue:", true) }
+                .map { it.substringAfter(':').trimStart().split(',', limit = 10) }.toList()
+        }
         val parsed = withContext(dispatcher) { runCatching { parse(content, file.extension.lowercase()) }
             .onFailure { Log.e(TAG, "PARSE_FAILED path=${file.absolutePath}", it) }
             .getOrDefault(emptyList()) }
@@ -133,6 +138,7 @@ class RealtimeSubtitleTranslator(
             translationLock = Mutex()
             cache.clear()
             sourceContent = content
+            sourceDialogueBodies = dialogueBodies
             sourcePath = file.absolutePath
             sourceStamp = file.lastModified() to file.length()
             cues = parsed
@@ -213,6 +219,7 @@ class RealtimeSubtitleTranslator(
             cache.clear()
             cues = emptyList()
             sourceContent = null
+            sourceDialogueBodies = emptyList()
             sourcePath = null
             sourceStamp = null
             prefetchPositionMs = 0L
@@ -596,17 +603,7 @@ class RealtimeSubtitleTranslator(
             ).joinToString(",")
         }
 
-        val dialogueLines = content
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
-            .lineSequence()
-            .filter { it.trimStart().startsWith("Dialogue:", true) }
-            .toList()
-        val line = dialogueLines.getOrNull(cue.index)
-        val body = line
-            ?.substringAfter(':', "")
-            ?.trimStart()
-            ?.split(',', limit = 10)
+        val body = sourceDialogueBodies.getOrNull(cue.index)
 
         if (body == null || body.size < 10) {
             return listOf(
