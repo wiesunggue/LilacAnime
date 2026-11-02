@@ -1,7 +1,6 @@
 package com.lilac.anime.player
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -11,7 +10,6 @@ import com.lilac.anime.ui.settings.AiSettingsScreen
 import com.lilac.anime.AppContextHolder
 import com.lilac.anime.viewmodel.AnimeViewModel
 import androidx.lifecycle.ViewModelProvider
-import java.io.File
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
@@ -52,10 +50,9 @@ class TranslationHttpIntegrationTest {
             assertTrue(translateRequest.path!!.contains(":generateContent"))
             assertEquals("fixture-key-not-a-real-credential",translateRequest.getHeader("x-goog-api-key"))
             assertTrue(translateRequest.body.readUtf8().contains("こんにちは"))
-            val dir = File(context.getExternalFilesDir(null), "subtitle-evidence").apply { mkdirs() }
-            compose.onNodeWithText("번역 테스트 성공").captureToImage().asAndroidBitmap().let { bitmap ->
-                File(dir, "settings-http-success.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-            }
+            val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+            try { saveSubtitleEvidence(context, "settings-http-success", screenshot) }
+            finally { screenshot.recycle() }
         } finally { SecureApiKeyStore.remove(context,"gemini");server.shutdown() }
     }
     @Test fun realHttpErrorIsDisplayedInTheResultDialog() {

@@ -254,7 +254,7 @@ jobs:
             gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon || test_exit=$?
             adb logcat -d -s RealtimeSubtitleTranslator:V LibassTranslationOverlay:V LilacMpv:V AndroidRuntime:E
             mkdir -p subtitle-screen-evidence
-            adb pull /sdcard/Android/data/com.lilac.anime.subtitlecheck/files/subtitle-evidence subtitle-screen-evidence/
+            adb pull /sdcard/Pictures/LilacSubtitleEvidence subtitle-screen-evidence/ || test_exit=1
             python3 scripts/emit_subtitle_evidence.py
             exit "$test_exit"
 

@@ -59,8 +59,7 @@ class SubtitleVideoPixelsTest {
                     b.recycle()
                 }
             }
-            val dir=File(context.getExternalFilesDir(null),"subtitle-evidence").apply { mkdirs() }
-            File(dir,"$name.png").outputStream().use { captured!!.compress(Bitmap.CompressFormat.PNG,100,it) }
+            saveSubtitleEvidence(context, name, captured!!)
             captured!!.recycle()
         }
         try {
