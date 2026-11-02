@@ -289,6 +289,23 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk > apk-badging.txt
           head -8 apk-badging.txt
 
+      - name: Build arm64 candidate for private local signing
+        shell: bash
+        run: |
+          sed -i 's/abiFilters += listOf("arm64-v8a", "x86_64")/abiFilters += listOf("arm64-v8a")/' app/build.gradle.kts
+          gradle :app:assembleDebug --no-daemon
+          mkdir -p subtitle-signing-input
+          cp app/build/outputs/apk/debug/app-debug.apk subtitle-signing-input/unsigned-candidate.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" subtitle-signing-input/apksigner.jar
+          cp apk-badging.txt subtitle-signing-input/tested-build-metadata.txt
+
+      - name: Upload candidate for private local signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-ci-candidate-for-local-signing
+          path: subtitle-signing-input/
+          retention-days: 7
+
       - name: Collect APK
         if: env.LILAC_PUBLISH_APK == 'true'
         shell: bash

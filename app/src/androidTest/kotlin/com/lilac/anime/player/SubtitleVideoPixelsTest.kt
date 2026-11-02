@@ -40,7 +40,7 @@ class SubtitleVideoPixelsTest {
         scenario.onActivity { activity ->
             engine = MpvPlayerEngine(activity)
             surface = MpvPlayerSurfaceView(activity, engine)
-            activity.setContentView(surface, FrameLayout.LayoutParams(-1,-1))
+            activity.setContentView(surface, FrameLayout.LayoutParams(640,360))
         }
         suspend fun frame(): Bitmap = withContext(Dispatchers.Main) { surface.bitmap ?: error("Texture has no video frame") }
         fun bright(bitmap: Bitmap): Int {
@@ -104,6 +104,7 @@ class SubtitleVideoPixelsTest {
             }
             assertEquals((2..7).toSet(), seen)
             ins.runOnMainSync { engine.pause(); engine.seekTo(1100) }
+            withTimeout(5000) { while (!engine.getCurrentSubtitleText().contains("한국어 대사 Line 1")) delay(50) }
             waitPixels(true,"translated-rewind")
         } finally {
             translator.clear(); workers.cancel()
