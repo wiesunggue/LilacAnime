@@ -205,6 +205,8 @@ jobs:
 
       - name: Generate deterministic black video fixture
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
           mkdir -p app/src/androidTest/assets
           ffmpeg -f lavfi -i color=c=black:s=640x360:r=15:d=20 -c:v mpeg4 -q:v 8 -y app/src/androidTest/assets/black.mp4
 

@@ -21,14 +21,15 @@ class SubtitleVideoPixelsTest {
         val video = File(context.cacheDir, "audit-black.mp4")
         ins.context.assets.open("black.mp4").use { input -> video.outputStream().use { input.copyTo(it) } }
         val source = File(context.cacheDir, "pixel-source.srt").apply {
-            writeText((0 until 12).joinToString("\n\n") { i -> "${i+1}\n00:00:%02d,000 --> 00:00:%02d,950\nLine $i".format(i,i) })
+            writeText((0 until 12).joinToString("\n\n") { i -> "${i+1}\n00:00:%02d,000 --> 00:00:%02d,999\nLine $i".format(i,i) })
         }
         context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", 10).commit()
+        val gate = CompletableDeferred<Unit>()
         val translator = RealtimeSubtitleTranslator(context, providerFactory = {
             object : TranslationProvider {
                 override val id = "gemini"
                 override val displayName = "pixel-test"
-                override suspend fun translateBatch(lines: List<String>): List<String> { delay(300); return lines.map { "한국어 대사 $it" } }
+                override suspend fun translateBatch(lines: List<String>): List<String> { gate.await(); delay(300); return lines.map { "한국어 대사 $it" } }
             }
         })
         val workers = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -68,6 +69,11 @@ class SubtitleVideoPixelsTest {
             withTimeout(8000) { while (engine.playbackState!=MpvPlayerEngine.STATE_READY || engine.videoWidth==0) delay(50) }
             ins.runOnMainSync { engine.pause(); engine.seekTo(1100) }
             translator.ensurePrepared(source.path,1100,workers,"gemini")
+            projected.writeText(translator.nativeTrackSnapshot()!!)
+            ins.runOnMainSync { engine.replaceSubtitleTrack(projected.path); engine.setSubtitleVisible(true) }
+            withTimeout(5000) { while (!engine.getCurrentSubtitleText().contains("Line 1")) delay(50) }
+            waitPixels(true,"pending-source")
+            gate.complete(Unit)
             withTimeout(5000) { while (translator.consumeReadyTranslatedEvents().none { it.startMs==1000L }) delay(50) }
             projected.writeText(translator.nativeTrackSnapshot()!!)
             ins.runOnMainSync { engine.replaceSubtitleTrack(projected.path); engine.setSubtitleVisible(true) }
@@ -77,9 +83,26 @@ class SubtitleVideoPixelsTest {
             waitPixels(false,"hidden")
             // sub-text still has Korean while hidden: explicitly prove that text alone is insufficient.
             assertTrue(engine.getCurrentSubtitleText().contains("한국어"))
-            ins.runOnMainSync { engine.setSubtitleVisible(true); engine.play() }
-            withTimeout(6000) { while (engine.currentPosition<3100) delay(50) }
-            waitPixels(true,"translated-playing")
+            ins.runOnMainSync { engine.setSubtitleVisible(true); engine.setSpeed(2f); engine.play() }
+            val seen = mutableSetOf<Int>()
+            withTimeout(10000) {
+                while (engine.currentPosition < 8100) {
+                    val position = engine.currentPosition
+                    translator.updatePlaybackPosition(position)
+                    translator.nativeTrackSnapshot()?.let { snapshot ->
+                        projected.writeText(snapshot)
+                        ins.runOnMainSync { engine.reloadCurrentSubtitle() }
+                    }
+                    val cue = (position / 1000).toInt()
+                    if (cue in 2..7 && position % 1000 in 250..750 && cue !in seen) {
+                        assertTrue("Missing translated cue $cue at $position", engine.getCurrentSubtitleText().contains("한국어 대사 Line $cue"))
+                        waitPixels(true,"translated-playing-$cue")
+                        seen += cue
+                    }
+                    delay(50)
+                }
+            }
+            assertEquals((2..7).toSet(), seen)
             ins.runOnMainSync { engine.pause(); engine.seekTo(1100) }
             waitPixels(true,"translated-rewind")
         } finally {

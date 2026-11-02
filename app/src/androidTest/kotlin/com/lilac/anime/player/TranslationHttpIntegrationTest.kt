@@ -53,7 +53,7 @@ class TranslationHttpIntegrationTest {
             assertEquals("fixture-key-not-a-real-credential",translateRequest.getHeader("x-goog-api-key"))
             assertTrue(translateRequest.body.readUtf8().contains("こんにちは"))
             val dir = File(context.getExternalFilesDir(null), "subtitle-evidence").apply { mkdirs() }
-            compose.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
+            compose.onNodeWithText("번역 테스트 성공").captureToImage().asAndroidBitmap().let { bitmap ->
                 File(dir, "settings-http-success.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
             }
         } finally { SecureApiKeyStore.remove(context,"gemini");server.shutdown() }
