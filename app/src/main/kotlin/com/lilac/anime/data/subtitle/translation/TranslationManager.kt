@@ -173,7 +173,7 @@ object TranslationManager {
         }
     }
 
-    suspend fun test(context: Context, providerId: String, text: String = "こんにちは。今日はいい天気ですね。"): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun test(context: Context, providerId: String, text: String = "こんにちは。今日はいい天気ですね。", providerFactory: (String) -> TranslationProvider = { createProvider(context, it) }): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
             if (Regex("(?m)^\\s*Dialogue:").containsMatchIn(normalized)) {
@@ -189,7 +189,7 @@ object TranslationManager {
                     sourceTexts += parts[9].trim()
                 }
                 if (sourceTexts.isEmpty()) error("번역할 Dialogue가 없습니다.")
-                val translated = createProvider(context, providerId).translateBatch(sourceTexts)
+                val translated = providerFactory(providerId).translateBatch(sourceTexts)
                 dialogueIndexes.forEachIndexed { i, lineIndex ->
                     val translatedText = translated.getOrNull(i)?.takeIf { it.isNotBlank() } ?: sourceTexts[i]
                     val parts = lines[lineIndex].substringAfter(':').trimStart().split(',', limit = 10).toMutableList()
@@ -200,7 +200,7 @@ object TranslationManager {
                 }
                 lines.joinToString("\n")
             } else {
-                val result = createProvider(context, providerId).translateBatch(listOf(text))
+                val result = providerFactory(providerId).translateBatch(listOf(text))
                 val translated = result.firstOrNull()?.trim()?.takeIf { it.isNotBlank() } ?: error("번역 결과가 비어 있습니다.")
                 if (translated == text.trim()) error("API 요청은 성공했지만 번역 결과가 원문과 같습니다. 모델/프롬프트 응답을 확인하세요.")
                 translated

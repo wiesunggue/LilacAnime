@@ -46,7 +46,11 @@ private fun aiFormatBytes(bytes: Long): String = when {
 }
 
 @Composable
-fun AiSettingsScreen(vm: AnimeViewModel, onNavigate: (String) -> Unit) {
+fun AiSettingsScreen(
+    vm: AnimeViewModel,
+    onNavigate: (String) -> Unit,
+    translationProviderFactory: ((String) -> com.lilac.anime.data.subtitle.translation.TranslationProvider)? = null,
+) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -542,7 +546,8 @@ fun AiSettingsScreen(vm: AnimeViewModel, onNavigate: (String) -> Unit) {
             OutlinedButton(onClick={vm.updatePlayerSettings(context,settings.copy(translationPrompt=LocalAiTranslationRuntime.DEFAULT_PROMPT))},modifier=Modifier.fillMaxWidth()){Text("기본 사용자 프롬프트로 복원")}
 
             TranslationTestPanel(provider = settings.translationProvider, execute = { input ->
-                TranslationManager.test(context, settings.translationProvider, input)
+                TranslationManager.test(context, settings.translationProvider, input,
+                    providerFactory = translationProviderFactory ?: { TranslationManager.createProvider(context, it) })
             })
 
             Spacer(Modifier.height(18.dp)); Text("클라우드 번역 API",fontSize=16.sp,fontWeight=FontWeight.Bold)

@@ -34,6 +34,33 @@ class RealtimeSubtitleTranslatorTest {
         fun time(value: Int) = "%02d:%02d:%02d,000".format(value / 3600, value / 60 % 60, value % 60)
         "${i+1}\n${time(seconds)} --> ${time(seconds+1)}\nLine $i"
     }
+    @Test fun overlappingLongSignDoesNotBlockCurrentDialogue() = runTest {
+        for (ahead in listOf(0, 10)) {
+            context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", ahead).commit()
+            val source = file("1\n00:00:00,000 --> 00:01:00,000\nSign\n\n" + (1..29).joinToString("\n\n") { i ->
+                "${i+1}\n00:00:%02d,000 --> 00:00:%02d,900\nDialogue $i".format(i, i)
+            })
+            val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+            translator.playbackTick(source.path, 0, backgroundScope, "gemini")
+            advanceTimeBy(200); runCurrent()
+            translator.playbackTick(source.path, 22000, backgroundScope, "gemini")
+            advanceTimeBy(200); runCurrent()
+            val ready = translator.consumeReadyTranslatedEvents()
+            assertTrue("Missing current dialogue, ahead=$ahead", ready.any { it.startMs == 22000L })
+            assertTrue(ready.any { it.startMs == 0L })
+            translator.clear()
+        }
+    }
+    @Test fun shortRewindReconsidersUntranslatedDialogue() = runTest {
+        val source = file("1\n00:00:00,000 --> 00:00:00,900\nEarlier\n\n2\n00:00:01,000 --> 00:00:01,900\nLater")
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        translator.playbackTick(source.path, 1100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        assertTrue(translator.consumeReadyTranslatedEvents().any { it.startMs == 0L })
+        translator.clear()
+    }
     @Test fun pausedSeekNearPreviousCueEndTranslatesCurrentCue() = runTest {
         val source = file("1\n00:00:03,000 --> 00:00:03,900\nOld\n\n2\n00:00:04,000 --> 00:00:04,900\nCurrent")
         val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })

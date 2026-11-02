@@ -14,7 +14,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
-class GeminiTranslator(private val context: Context) : TranslationProvider {
+class GeminiTranslator(
+    private val context: Context,
+    private val baseUrl: String = "https://generativelanguage.googleapis.com/v1beta/",
+) : TranslationProvider {
     override val id = "gemini"
     override val displayName = "Gemini"
     private val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(180, TimeUnit.SECONDS).callTimeout(210, TimeUnit.SECONDS).build()
@@ -74,7 +77,7 @@ class GeminiTranslator(private val context: Context) : TranslationProvider {
                     .put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", CloudTranslationPrompt.config(context).system))))
                     .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", CloudTranslationPrompt.userMessage(context, lines))))))
                     .put("generationConfig", config)
-                val request = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(model, "UTF-8")}:generateContent")
+                val request = Request.Builder().url("${baseUrl.trimEnd('/')}/models/${URLEncoder.encode(model, "UTF-8")}:generateContent")
                     .header("x-goog-api-key", key).post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
                 android.util.Log.d("GeminiTranslator", "GENERATE_REQUEST model=$model configIndex=${configs.indexOf(config)} lines=${lines.size}")
                 return@withContext client.newCall(request).execute().use { response ->
@@ -103,7 +106,7 @@ class GeminiTranslator(private val context: Context) : TranslationProvider {
         val result = mutableListOf<String>(); var token = ""
         do {
             val suffix = if (token.isBlank()) "" else "&pageToken=${URLEncoder.encode(token, "UTF-8")}"
-            val request = Request.Builder().url("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000$suffix").header("x-goog-api-key", key).get().build()
+            val request = Request.Builder().url("${baseUrl.trimEnd('/')}/models?pageSize=1000$suffix").header("x-goog-api-key", key).get().build()
             android.util.Log.d("GeminiTranslator", "MODELS_REQUEST url=${request.url}")
             client.newCall(request).execute().use { response ->
                 val raw = response.body?.string().orEmpty()

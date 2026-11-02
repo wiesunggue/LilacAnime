@@ -259,7 +259,6 @@ class RealtimeSubtitleTranslator(
     }
 
     private suspend fun prefetchLoop(localGeneration: Int, initialPositionMs: Long) {
-        var nextIndex = -1
         var lastPositionMs = initialPositionMs
         val failures = mutableMapOf<String, Int>()
 
@@ -285,46 +284,20 @@ class RealtimeSubtitleTranslator(
                 compareBy<Cue> { it.startMs }.thenBy { it.endMs }.thenBy { it.index },
             )
 
-            // Choose an active or upcoming cue. A grace window behind the clock
-            // selects an expired cue and can stall forever while paused with no look-ahead.
-            val currentIndex = ordered.indexOfFirst { it.endMs > position }
-                .let { if (it < 0) ordered.lastIndex.coerceAtLeast(0) else it }
-
-            // Rewind prefetch after a backwards seek. The previous monotonic
-            // cursor could permanently skip an earlier cue that had failed or
-            // had never been translated.
-            if (position + 1500L < lastPositionMs) nextIndex = currentIndex
+            // Re-evaluate all active cues on every tick. Long overlapping signs
+            // must not anchor the future window, and every rewind must recover
+            // uncached dialogue regardless of seek distance.
+            if (position < lastPositionMs) failures.clear()
             lastPositionMs = position
-            if (nextIndex < currentIndex) nextIndex = currentIndex
-
-            val windowEnd = (currentIndex + prefetchAhead + 1).coerceAtMost(ordered.size)
-            if (nextIndex >= windowEnd) {
-                delay(150L)
-                continue
-            }
-
-            while (
-                nextIndex < windowEnd &&
-                lock.withLock { cache.containsKey(cueCacheKey(ordered[nextIndex])) }
-            ) {
-                nextIndex++
-            }
-            if (nextIndex >= windowEnd) continue
-
+            val active = ordered.filter { it.startMs <= position && it.endMs > position }
+            val upcoming = ordered.filter { it.startMs > position }
+                .take(prefetchAhead + if (active.isEmpty()) 1 else 0)
+            val capacity = if (activeProvider is LocalTranslator) 1 else batchSize
+            val batch = (active + upcoming).filter { cue ->
+                lock.withLock { !cache.containsKey(cueCacheKey(cue)) } && (failures[cueCacheKey(cue)] ?: 0) < 3
+            }.take(capacity)
+            if (batch.isEmpty()) { delay(150L); continue }
             val selectedProvider = activeProvider
-            val batchEnd = if (selectedProvider is LocalTranslator) {
-                nextIndex + 1
-            } else {
-                minOf(windowEnd, nextIndex + batchSize)
-            }
-            val batch = mutableListOf<Cue>()
-            for (candidate in ordered.subList(nextIndex, batchEnd)) {
-                if (!lock.withLock { cache.containsKey(cueCacheKey(candidate)) }) {
-                    batch += candidate
-                }
-            }
-            nextIndex = batchEnd
-            if (batch.isEmpty()) continue
             if (localGeneration != lock.withLock { generation }) return
 
             Log.i(
@@ -352,10 +325,8 @@ class RealtimeSubtitleTranslator(
                         translateCloudCues(
                             selectedProvider = selectedProvider,
                             batch = batch,
-                            ordered = ordered,
                             failures = failures,
                             localGeneration = localGeneration,
-                            onRetryIndex = { retry -> nextIndex = minOf(nextIndex, retry) },
                         )
                     }
                 }
@@ -373,9 +344,7 @@ class RealtimeSubtitleTranslator(
                     val key = cueCacheKey(cue)
                     val attempt = (failures[key] ?: 0) + 1
                     failures[key] = attempt
-                    if (attempt < 3) {
-                        nextIndex = minOf(nextIndex, ordered.indexOf(cue))
-                    } else {
+                    if (attempt >= 3) {
                         exhausted = true
                         Log.e(TAG, "PREFETCH_GIVE_UP provider=$activeProviderId cue=${cue.index} attempts=$attempt")
                     }
@@ -419,10 +388,8 @@ class RealtimeSubtitleTranslator(
     private suspend fun translateCloudCues(
         selectedProvider: TranslationProvider,
         batch: List<Cue>,
-        ordered: List<Cue>,
         failures: MutableMap<String, Int>,
         localGeneration: Int,
-        onRetryIndex: (Int) -> Unit,
     ) {
         val sources = batch.map { modelText(it.text, it.kind) }
         Log.i(
@@ -478,9 +445,7 @@ class RealtimeSubtitleTranslator(
                         "PREFETCH_SINGLE_FALLBACK_FAILED provider=$activeProviderId cue=${cue.index} attempt=$attempt",
                         singleError,
                     )
-                    if (attempt < 3) {
-                        onRetryIndex(ordered.indexOf(cue))
-                    } else {
+                    if (attempt >= 3) {
                         AiRuntimeDiagnostics.record(
                             context,
                             "실시간 자막 단일 번역 ($activeProviderId, cue=${cue.index})",

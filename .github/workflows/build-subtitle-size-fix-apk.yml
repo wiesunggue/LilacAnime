@@ -6,6 +6,7 @@ on:
       - feat/android-functional-parity
       - fix/subtitle-lifecycle
       - fix/native-translation-track
+      - fix/subtitle-verified-v11
   pull_request:
     branches:
       - main
@@ -104,8 +105,8 @@ jobs:
                   testInstrumentationRunner = "com.lilac.anime.player.SubtitleTestRunner"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 39
-                  versionName = "0.4.1-alpha-10-subtitle-check"
+                  versionCode = 40
+                  versionName = "0.4.1-alpha-11-subtitle-check"
 
                   ndk {
                       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -184,6 +185,7 @@ jobs:
               testImplementation("org.robolectric:robolectric:4.14.1")
               androidTestImplementation("androidx.test:runner:1.6.2")
               androidTestImplementation("androidx.test.ext:junit:1.2.1")
+              androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
               androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
               androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.7.0")
               debugImplementation("androidx.compose.ui:ui-test-manifest:1.7.0")
@@ -200,6 +202,11 @@ jobs:
       - name: Verify bundled Whisper library
         shell: bash
         run: test -s app/src/main/jniLibs/arm64-v8a/liblilac_whisper.so
+
+      - name: Generate deterministic black video fixture
+        run: |
+          mkdir -p app/src/androidTest/assets
+          ffmpeg -f lavfi -i color=c=black:s=640x360:r=15:d=20 -c:v mpeg4 -q:v 8 -y app/src/androidTest/assets/black.mp4
 
       - name: Run JVM regression tests
         env:
@@ -241,7 +248,13 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
-            gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon || { adb logcat -d -s RealtimeSubtitleTranslator:V LibassTranslationOverlay:V LilacMpv:V AndroidRuntime:E; exit 1; }
+            test_exit=0
+            gradle :app:connectedDebugAndroidTest --stacktrace --no-daemon || test_exit=$?
+            adb logcat -d -s RealtimeSubtitleTranslator:V LibassTranslationOverlay:V LilacMpv:V AndroidRuntime:E
+            mkdir -p subtitle-screen-evidence
+            adb pull /sdcard/Android/data/com.lilac.anime.subtitlecheck/files/subtitle-evidence subtitle-screen-evidence/
+            python3 scripts/emit_subtitle_evidence.py
+            exit "$test_exit"
 
       - name: Upload Android functional test reports
         if: always()
@@ -251,6 +264,7 @@ jobs:
           path: |
             app/build/outputs/androidTest-results/
             app/build/reports/androidTests/
+            subtitle-screen-evidence/
           if-no-files-found: ignore
           retention-days: 14
 
