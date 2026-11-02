@@ -1,0 +1,4 @@
+overlap_long_sign | position=1100 | expected cue=1000 | completed=[0] | BUG_REPRODUCED
+overlap_default_lookahead_10 | position=22000 | expected cue=22000 | completed=[0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000] | BUG_REPRODUCED
+short_rewind_1000ms | position=100 | expected cue=0 | completed=[1000] | BUG_REPRODUCED
+long_rewind_control | position=100 | expected cue=0 | completed=[0, 4000] | CONTROL_PASS
