@@ -75,8 +75,8 @@ v10의 기존 결과는 JVM 85개/Android 12개 통과였다. 하지만 `sub-tex
 
 ### 후속 수정/검사
 
-- `45e7422...`: 영상 표면을 640×360으로 제한해 캡처 비용을 줄이고, 되감기 후 문장 확인을 추가. 실행: https://github.com/wiesunggue/LilacAnime/actions/runs/41459508551
-- `27ffa686...`: 캡처를 앱 전용 폴더 대신 `MediaStore`의 `Pictures/LilacSubtitleEvidence`에 저장하도록 변경. Gradle 정리 후에도 adb로 회수하도록 CI 경로 수정. **이 변경은 문서 작성 시 재검증 중이다.**
+- `45e7422...`: 영상 표면을 640×360으로 제한해 캡처 비용을 줄이고, 되감기 후 문장 확인을 추가. 실행: https://github.com/wiesunggue/LilacAnime/actions/runs/41459508551 . **이 실행도 Android 15개 중 동일한 픽셀 검사 1개가 실패했다. 이번 오류는 8000ms 픽셀 대기 시간 초과다.** 단순히 캡처 크기를 줄여 해결됐다고 판단하지 않는다. 원문/번역/숨김/재생/되감기 중 어느 단계인지 오류에 단계명과 마지막 프레임을 추가해 좁혀야 한다.
+- `27ffa686...`: 캡처를 앱 전용 폴더 대신 `MediaStore`의 `Pictures/LilacSubtitleEvidence`에 저장하도록 변경. Gradle 정리 후에도 adb로 회수하도록 CI 경로 수정. **이 변경은 문서 작성 시 재검증 중이며 픽셀 시간 초과를 고친 변경은 아니다.** 실행: https://github.com/wiesunggue/LilacAnime/actions/runs/41460711233
 - 최신 실행 목록: https://github.com/wiesunggue/LilacAnime/actions/workflows/build-subtitle-size-fix-apk.yml
 - 테스트 파일: `SubtitleVideoPixelsTest.kt`, `TranslationHttpIntegrationTest.kt`, `SubtitleEvidence.kt` (`app/src/androidTest/kotlin/com/lilac/anime/player/`).
 - `scripts/emit_subtitle_evidence.py`는 회수된 PNG를 검사 로그에 함께 보존한다.
