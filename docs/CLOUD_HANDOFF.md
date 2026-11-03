@@ -2,6 +2,24 @@
 
 작성일: 2026-11-02 (한국 시간). **이 문서는 작업 상태의 스냅샷이다. 실행 중인 GitHub Actions의 최종 결과는 작업 재개 시 다시 확인한다.**
 
+## 서명 백업 복원과 후보 빌드 (2026-11-03)
+
+- 사용자가 비공개 ZIP 백업을 직접 제공했다. 저장소 밖에 복원한 키에서 내보낸 인증서의 SHA-256이 `9f1aa4a4b4557a2c5c8bd5e7aa79c15f36021a7d09b4203e42d098f591140927`과 일치했다. 이전 절의 서명 백업 부재는 해소됐다. 키/비밀번호는 Git에 포함하지 않는다.
+- 기존 키로 universal 검사용 APK와 arm64 후보 APK를 빌드했다. `apksigner verify` 통과, 패키지 `com.lilac.anime.subtitlecheck`, versionCode `40`, versionName `0.4.1-alpha-11-subtitle-check`, 후보 ABI `arm64-v8a`를 확인했다.
+- arm64 후보 SHA-256: `4f744ea11a69875deda848933cb1372664cb9e152b89f11427007f48367bbbd6`. 로컬 산출물: `/workspace/artifacts/LilacAnime-subtitle-check-v11-arm64-candidate.apk`. **서명과 빌드가 확인된 후보이며 실제 자막 표시 안정화 완료본은 아니다.**
+- API 29 x86_64 소프트웨어 에뮬레이터 부팅/직접 APK 설치는 성공했다. KVM이 없으며 Gradle 기기 조회에서 `ShellCommandUnresponsiveException`이 발생했다. 직접 픽셀 검사 실행의 결과는 아래 별도 기록으로 구분한다. 검사 수나 표시 결과를 추정하지 않는다.
+- 이번 작업의 JVM 87개/Android 테스트 소스 컴파일 통과 사실은 유지된다. 실제 유료 API 및 전체 PlayerScreen 회차/파일/모드 연속 전환 검증은 남아 있다. v11 브랜치 push는 기존 Actions 검사를 트리거하지만 성공 여부는 실행 결과를 읽고 확인해야 한다.
+
+## 현재 클라우드 후속 작업 (2026-11-02)
+
+- 시작 기준: `fix/subtitle-verified-v11`의 `270607c`. 아래 변경은 현재 작업 공간에 있으며 아직 원격에 반영하지 않았다.
+- `PlayerScreen`의 실시간 번역기를 `remember(episode)` 공유 객체에서 번역 `LaunchedEffect`가 소유하는 객체로 옮겼다. 같은 회차에서 파일/제공자/모드를 바꿀 때 취소된 작업의 지연된 `clear()`가 다음 작업의 세션을 지우지 않게 한다. 전체 PlayerScreen 전환 UI를 실행해 재현/해결 확인한 것은 아니다.
+- 픽셀 검사는 실패한 단계명, 밝은 픽셀 수, 재생 시각, 자막 문자열/트랙 경로를 assertion에 포함하며 마지막 프레임도 보존한다. 2배속 샘플링 중 PNG 압축/MediaStore 쓰기를 하지 않고 재생 후 저장한다. 기대 대사 집합 `[2,3,4,5,6,7]`, 픽셀 임계값과 대기 제한은 유지했다.
+- 현재 인스턴스 검증: JVM 87개, 실패/오류/건너뜀 0개. Android 테스트 소스 컴파일 통과. 실제 영상 픽셀 검사, 전체 PlayerScreen 수명주기 및 유료 API 호출은 아직 검증하지 않았다.
+- 최신 Actions API 조회는 `api.github.com` 접근에서 Forbidden이었다. 도메인 허용 초안만 저장했고 적용/조회 성공은 확인하지 않았다. 과거 실패가 해결되었다고 해석하지 않는다.
+- SDK/에뮬레이터를 설치했지만 기존 개인 서명 백업은 이 환경에 없고 Library 파일을 읽는 도구도 없다. 기존 키가 복원되기 전 새 키나 APK를 만들지 않았다. 소유자가 비공개 백업을 전달해야 동일 서명 후보와 실제 Android 실행을 이어갈 수 있다.
+- 로컬 명령: `/workspace/lilac-setup/gradle :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin`. 외부 빌드 설정/로그는 `/workspace/lilac-setup`이며 새 환경에 자동 이전된다고 가정하지 않는다.
+
 ## 1. 저장소와 재개 위치
 
 - Android/PC 앱 저장소: https://github.com/wiesunggue/LilacAnime

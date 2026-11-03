@@ -317,7 +317,6 @@ fun PlayerScreen(
     var subtitleSelectionNeedsUserChoice by remember(currentEpisode.id) { mutableStateOf(true) }
     var initialTranslationMode by remember(currentEpisode.id) { mutableStateOf("original") }
     var initialSubtitleTitle by remember(currentEpisode.id) { mutableStateOf(anime.title) }
-    val realtimeTranslator = remember(currentEpisode.id) { RealtimeSubtitleTranslator(context.applicationContext) }
     val initialSubtitleRequest = remember(currentEpisode.id) { LatestRequest(playerScope) }
     val manualSubtitleRequest = remember(currentEpisode.id) { LatestRequest(playerScope) }
     var subtitleApplying by remember(currentEpisode.id) { mutableStateOf(false) }
@@ -539,6 +538,10 @@ fun PlayerScreen(
             setSubtitleVisibleForMode(subtitleEnabled)
             return@LaunchedEffect
         }
+        // Each effect owns its worker/cache. A cancelled effect can finish its
+        // suspending cleanup after the next file/provider effect has started.
+        // Sharing a remembered translator lets that cleanup clear the new session.
+        val realtimeTranslator = RealtimeSubtitleTranslator(context.applicationContext)
         val source = localSubtitle ?: engine.currentSubtitleFilePath
         val projected = File.createTempFile("translated-", ".ass", context.cacheDir)
         try {

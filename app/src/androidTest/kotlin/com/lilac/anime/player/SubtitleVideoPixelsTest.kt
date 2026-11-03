@@ -48,19 +48,27 @@ class SubtitleVideoPixelsTest {
             bitmap.getPixels(pixels,0,bitmap.width,0,0,bitmap.width,bitmap.height)
             return pixels.count { (it shr 16 and 255)>170 && (it shr 8 and 255)>170 && (it and 255)>170 }
         }
+        val evidence = linkedMapOf<String, Bitmap>()
         suspend fun waitPixels(visible: Boolean, name: String) {
-            var captured: Bitmap? = null
-            withTimeout(8000) {
+            var last: Bitmap? = null
+            var count = -1
+            val matched = withTimeoutOrNull(8000) {
                 while (true) {
                     delay(100)
-                    val b=frame()
-                    val count=bright(b)
-                    if ((visible && count>80) || (!visible && count<20)) { captured=b; break }
-                    b.recycle()
+                    last?.recycle()
+                    last = frame()
+                    count = bright(last!!)
+                    if ((visible && count > 80) || (!visible && count < 20)) return@withTimeoutOrNull true
                 }
-            }
-            saveSubtitleEvidence(context, name, captured!!)
-            captured!!.recycle()
+                @Suppress("UNREACHABLE_CODE")
+                false
+            } == true
+            last?.let { evidence[name] = it }
+            assertTrue(
+                "Pixel stage=$name visible=$visible bright=$count position=${engine.currentPosition} " +
+                    "playing=${engine.isPlaying} text=${engine.getCurrentSubtitleText()} track=${engine.currentSubtitleFilePath}",
+                matched,
+            )
         }
         try {
             withTimeout(5000) { while (!surface.isAvailable) delay(50) }
@@ -106,9 +114,17 @@ class SubtitleVideoPixelsTest {
             withTimeout(5000) { while (!engine.getCurrentSubtitleText().contains("한국어 대사 Line 1")) delay(50) }
             waitPixels(true,"translated-rewind")
         } finally {
-            translator.clear(); workers.cancel()
-            ins.runOnMainSync { engine.release() }; scenario.close()
-            video.delete(); source.delete(); projected.delete()
+            // Encoding/writing PNGs during 2x playback can skip the next cue's
+            // sampling window. Retain the actual frames and persist after pause.
+            ins.runOnMainSync { engine.pause() }
+            try {
+                for ((name, bitmap) in evidence) saveSubtitleEvidence(context, name, bitmap)
+            } finally {
+                evidence.values.forEach { it.recycle() }
+                translator.clear(); workers.cancel()
+                ins.runOnMainSync { engine.release() }; scenario.close()
+                video.delete(); source.delete(); projected.delete()
+            }
         }
     }
 }
