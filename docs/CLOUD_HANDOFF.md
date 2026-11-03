@@ -1,6 +1,12 @@
 # LilacAnime 클라우드 작업 인계
 
-작성일: 2026-11-02 (한국 시간). **이 문서는 작업 상태의 스냅샷이다. 실행 중인 GitHub Actions의 최종 결과는 작업 재개 시 다시 확인한다.**
+최신 확인일: 2026-11-03 UTC. **이 문서는 작업 상태의 스냅샷이다. 실행 중인 GitHub Actions의 최종 결과는 작업 재개 시 다시 확인한다.**
+
+## 최신 개선: v13 (versionCode 42)
+
+[BUGFIX_V13.md](BUGFIX_V13.md)에 크기·색상·번역 대기·트랙 갱신·실제 메뉴 터치 문제와 검증 범위를 기록했다. 수정 브랜치는 계속 `fix/subtitle-verified-v11`이며 `main`으로 병합하지 않았다. JVM 109개와 실제 PlayerScreen/ASS 픽셀 검사 2개가 통과했다. 같은 초록색의 크기 증가, 실제 터치/모드 전환, 연속 대사 1~5, 첫 번역과 픽셀이 같은 되감기 화면을 확인했다. 모델 응답만 대체 제공자를 사용했다. 기존 패키지/인증서로 arm64 APK 서명 검증을 완료했다. [다운로드 브랜치](https://github.com/wiesunggue/LilacAnime/tree/downloads/subtitle-check-v13)는 APK·설치 안내·검사 캡처를 보관한다. 소스 수정 브랜치와 혼동하지 않는다.
+
+아래 v12/v11 항목은 이전 기록이다. 기존 2배속 캡처 실패와 실제 유료 API·사용자 기기 미검증을 전체 해결로 해석하지 않는다. GitHub Actions API 접근은 이 환경에서 차단되어 최신 원격 실행 결과를 읽지 못했다.
 
 ## 최신 개선: v12 (versionCode 41)
 

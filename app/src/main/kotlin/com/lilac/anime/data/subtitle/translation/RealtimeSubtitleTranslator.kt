@@ -31,6 +31,8 @@ class RealtimeSubtitleTranslator(
         val text: String,
         val kind: String,
         val index: Int,
+        val bodyStart: Int = -1,
+        val bodyEnd: Int = -1,
     )
 
     private val lock = Mutex()
@@ -63,15 +65,65 @@ class RealtimeSubtitleTranslator(
         val assEventData: String,
     )
 
-    private var projectionStamp: Pair<Int, Int>? = null
+    private var cacheRevision = 0L
+    private var projectionStamp: Pair<Int, Long>? = null
+    private var playbackStamp: Pair<Int, Long>? = null
+    private var lastTranslationError: String? = null
+
+    data class PlaybackSnapshot(val content: String, val extension: String)
+    data class PlaybackProgress(val completed: Int, val total: Int, val error: String?)
+
+    suspend fun playbackProgress(): PlaybackProgress = lock.withLock {
+        PlaybackProgress(cache.size, cues.size, lastTranslationError)
+    }
+
+    /** Production playback changes dialogue only, never the source container or
+     * its styles, cue settings, identifiers, comments and untranslated events. */
+    suspend fun nativePlaybackSnapshot(): PlaybackSnapshot? = withContext(dispatcher) { lock.withLock {
+        val content = sourceContent ?: return@withLock null
+        // Keep the already selected original track until a translation exists.
+        if (cache.isEmpty() || cues.isEmpty()) return@withLock null
+        val stamp = generation to cacheRevision
+        if (playbackStamp == stamp) return@withLock null
+        val kind = cues.first().kind
+        val result = if (kind in setOf("srt", "vtt", "smi")) {
+            var cursor = 0
+            buildString {
+                for (cue in cues.sortedBy { it.bodyStart }) {
+                    val translated = cache[cueCacheKey(cue)] ?: continue
+                    if (cue.bodyStart < cursor || cue.bodyEnd > content.length || cue.bodyStart < 0) continue
+                    append(content, cursor, cue.bodyStart)
+                    val original = content.substring(cue.bodyStart, cue.bodyEnd)
+                    append(SubtitleMarkup.restoreNativeMarkup(original, translated))
+                    cursor = cue.bodyEnd
+                }
+                append(content, cursor, content.length)
+            }
+        } else renderAssSnapshot(content)
+        playbackStamp = stamp
+        PlaybackSnapshot(result, if (kind in setOf("srt", "vtt", "smi")) kind else "ass")
+    } }
+
+    // Call only while holding lock. A revision cannot collide like Map.hashCode.
+    private fun storeTranslation(cue: Cue, value: String) {
+        if (cache.put(cueCacheKey(cue), value) != value) cacheRevision++
+        lastTranslationError = null
+    }
 
     /** Full timeline, including original text for pending/failed cues. Like mpv
      * subtrans, publish only changed snapshots and let mpv own rendering/time. */
     suspend fun nativeTrackSnapshot(): String? = withContext(dispatcher) { lock.withLock {
         val content = sourceContent ?: return@withLock null
         if (cues.isEmpty()) return@withLock null
-        val stamp = generation to cache.hashCode()
+        val stamp = generation to cacheRevision
         if (projectionStamp == stamp) return@withLock null
+        val result = renderAssSnapshot(content)
+        projectionStamp = stamp
+        result
+    } }
+
+    /** Legacy ASS projection for overlay callers. PlayerScreen uses nativePlaybackSnapshot. */
+    private fun renderAssSnapshot(content: String): String {
         val assSource = cues.any { it.kind == "ass" || it.kind == "ssa" }
         val result = if (assSource) {
             // Preserve untranslatable drawings, punctuation, comments and styles.
@@ -94,9 +146,8 @@ class RealtimeSubtitleTranslator(
                 append("Dialogue: "); append(buildAssEventData(content, cue, text)); append('\n')
             }
         }
-        projectionStamp = stamp
-        result
-    } }
+        return result
+    }
 
     private suspend fun prepare(
         path: String?,
@@ -118,7 +169,9 @@ class RealtimeSubtitleTranslator(
             return
         }
 
-        val content = withContext(dispatcher) { readSubtitleText(file) }
+        val content = withContext(dispatcher) {
+            readSubtitleText(file)?.replace("\r\n", "\n")?.replace('\r', '\n')
+        }
         if (content == null) {
             Log.e(TAG, "SESSION_READ_FAILED path=${file.absolutePath}")
             clearSession()
@@ -147,6 +200,7 @@ class RealtimeSubtitleTranslator(
             worker = null
             translationLock = Mutex()
             cache.clear()
+            lastTranslationError = null
             sourceContent = content
             sourceDialogueBodies = dialogueBodies
             sourcePath = file.absolutePath
@@ -227,6 +281,7 @@ class RealtimeSubtitleTranslator(
             worker = null
             translationLock = Mutex()
             cache.clear()
+            lastTranslationError = null
             cues = emptyList()
             sourceContent = null
             sourceDialogueBodies = emptyList()
@@ -334,6 +389,7 @@ class RealtimeSubtitleTranslator(
                 Log.d(TAG, "PREFETCH_CANCELLED provider=$activeProviderId")
                 throw error
             } catch (error: Throwable) {
+                lock.withLock { if (localGeneration == generation) lastTranslationError = error.message ?: "Translation failed" }
                 Log.e(
                     TAG,
                     "PREFETCH_BATCH_FAILED provider=$activeProviderId cues=${batch.joinToString { it.index.toString() }}",
@@ -381,7 +437,7 @@ class RealtimeSubtitleTranslator(
         val result = provider.translateWithContext(source, contextMemory, futureLines).trim()
         if (result.isBlank()) error("번역 결과가 비어 있습니다.")
         lock.withLock {
-            if (localGeneration == generation) cache[cueCacheKey(cue)] = result
+            if (localGeneration == generation) storeTranslation(cue, result)
         }
     }
 
@@ -405,7 +461,7 @@ class RealtimeSubtitleTranslator(
             lock.withLock {
                 if (localGeneration == generation) {
                     batch.indices.forEach { index ->
-                        cache[cueCacheKey(batch[index])] = results[index].trim()
+                        storeTranslation(batch[index], results[index].trim())
                     }
                 }
             }
@@ -432,11 +488,12 @@ class RealtimeSubtitleTranslator(
                     ).firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
                         ?: error("단일 자막 번역 결과가 비어 있습니다.")
                     lock.withLock {
-                        if (localGeneration == generation) cache[cueCacheKey(cue)] = single
+                        if (localGeneration == generation) storeTranslation(cue, single)
                     }
                     Log.i(TAG, "PREFETCH_SINGLE_FALLBACK_OK provider=$activeProviderId cue=${cue.index}")
                 } catch (singleError: Throwable) {
                     if (singleError is CancellationException) throw singleError
+                    lock.withLock { if (localGeneration == generation) lastTranslationError = singleError.message ?: "Translation failed" }
                     val key = cueCacheKey(cue)
                     val attempt = (failures[key] ?: 0) + 1
                     failures[key] = attempt
@@ -606,29 +663,7 @@ class RealtimeSubtitleTranslator(
             return normalized.replace("\\N", "\n").replace("\n", "\\N")
         }
 
-        val tagRegex = Regex("\\{[^}]*\\}")
-        val matches = tagRegex.findAll(original).toList()
-        val translatedText = normalized.replace("\\N", "\n").replace("\n", "\\N")
-        if (matches.isEmpty()) return translatedText
-
-        val visibleLength = original.replace(tagRegex, "").length.coerceAtLeast(1)
-        val insertions = matches.map { match ->
-            val before = original.substring(0, match.range.first).replace(tagRegex, "")
-            val ratio = before.length.toDouble() / visibleLength.toDouble()
-            val position = (translatedText.length * ratio).toInt().coerceIn(0, translatedText.length)
-            position to match.value
-        }.sortedWith(compareBy<Pair<Int, String>> { it.first })
-
-        val out = StringBuilder()
-        var cursor = 0
-        insertions.groupBy { it.first }.toSortedMap().forEach { (position, tags) ->
-            val p = position.coerceIn(cursor, translatedText.length)
-            if (p > cursor) out.append(translatedText.substring(cursor, p))
-            tags.forEach { out.append(it.second) }
-            cursor = p
-        }
-        if (cursor < translatedText.length) out.append(translatedText.substring(cursor))
-        return out.toString()
+        return SubtitleMarkup.restoreAssMarkup(original, translated)
     }
 
     private fun parse(text: String, ext: String): List<Cue> {
@@ -662,6 +697,8 @@ class RealtimeSubtitleTranslator(
 
     private fun parseTimedText(text: String, kind: String): List<Cue> {
         val lines = text.lines()
+        val offsets = IntArray(lines.size)
+        for (line in 1 until lines.size) offsets[line] = offsets[line - 1] + lines[line - 1].length + 1
         val result = mutableListOf<Cue>()
         var i = 0
         var index = 0
@@ -690,17 +727,13 @@ class RealtimeSubtitleTranslator(
                 continue
             }
 
-            val body = buildList {
-                var j = i + 1
-                while (j < lines.size && !timing.matches(lines[j])) {
-                    val line = lines[j]
-                    if (line.isBlank()) break
-                    add(line)
-                    j++
-                }
-            }.joinToString("\\N").trim()
+            val bodyStart = i + 1
+            var bodyEnd = bodyStart
+            while (bodyEnd < lines.size && lines[bodyEnd].isNotBlank() && !timing.matches(lines[bodyEnd])) bodyEnd++
+            val body = lines.subList(bodyStart, bodyEnd).joinToString("\\N").trim()
 
-            if (body.isNotBlank()) result += Cue(start, end, body, kind, index++)
+            if (body.isNotBlank()) result += Cue(start, end, body, kind, index++, offsets[bodyStart],
+                if (bodyEnd < lines.size) offsets[bodyEnd] - 1 else text.length)
             i++
             while (i < lines.size && !timing.matches(lines[i]) && lines[i].isNotBlank()) i++
         }
@@ -723,7 +756,7 @@ class RealtimeSubtitleTranslator(
             val end = parseAssTime(parts[2])
             val body = parts[9].trim()
             val visible = stripSubtitleMarkup(body)
-            if (start >= 0L && end > start && visibleLetter.containsMatchIn(visible)) {
+            if (start >= 0L && end > start && visibleLetter.containsMatchIn(visible) && !SubtitleMarkup.isAssDrawing(body)) {
                 result += Cue(start, end, body, "ass", ordinal)
             }
             ordinal++
@@ -742,12 +775,10 @@ class RealtimeSubtitleTranslator(
                 ?.getOrNull(1)
                 ?.toLongOrNull()
                 ?: start + 4000L
-            val body = match.groupValues[2]
-                .replace(Regex("(?is)<br\\s*/?>"), "\\N")
-                .replace(Regex("(?is)<[^>]+>"), "")
-                .replace("&nbsp;", " ", true)
-                .trim()
-            if (body.isBlank() || next <= start) null else Cue(start, next, body, "smi", index)
+            val body = match.groupValues[2].trim()
+            val range = match.groups[2]!!.range
+            if (SubtitleMarkup.plainText(body).isBlank() || next <= start) null
+            else Cue(start, next, body, "smi", index, range.first, range.last + 1)
         }
     }
 

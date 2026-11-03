@@ -83,6 +83,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -212,7 +214,8 @@ fun PlayerScreen(
     anime: Anime,
     episode: Episode,
     vm: AnimeViewModel,
-    back: () -> Unit
+    back: () -> Unit,
+    translationProviderFactory: ((Context, String) -> com.lilac.anime.data.subtitle.translation.TranslationProvider)? = null,
 ) {
     val context = LocalContext.current
     val playbackSource = com.lilac.anime.data.PlaybackHistory.sourceFor(anime, vm.playerSettings.videoSourcePreference)
@@ -294,6 +297,11 @@ fun PlayerScreen(
     var chapters by remember { mutableStateOf<List<ChapterSkipSegment>>(emptyList()) }
     var subtitleEnabled by rememberSaveable { mutableStateOf(true) }
     var subtitleTranslationMode by rememberSaveable { mutableStateOf("original") }
+    var translationProgress by remember(currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider, localSubtitle) {
+        mutableStateOf(RealtimeSubtitleTranslator.PlaybackProgress(0, 0, null))
+    }
+    var translationTrackError by remember(currentEpisode.id, subtitleTranslationMode, localSubtitle) { mutableStateOf(false) }
+    var translationSourcePath by remember(currentEpisode.id) { mutableStateOf<String?>(null) }
     var surfaceAttached by remember { mutableStateOf(false) }
     var vttOutlineWidth by rememberSaveable { mutableFloatStateOf(vm.playerSettings.vttOutlineWidth) }
     var customFontName by remember { mutableStateOf<String?>(null) }
@@ -531,8 +539,17 @@ fun PlayerScreen(
         )
     }
 
-    // Feed complete subtitle snapshots to mpv's native renderer. Pending/failed
-    // translations retain the source cue instead of disappearing from the screen.
+    LaunchedEffect(engine, vm.playerSettings.subtitleSize, vm.playerSettings.textColor,
+        vm.playerSettings.strokeColor, vm.playerSettings.vttBold, vm.playerSettings.vttOutlineWidth,
+        vm.playerSettings.subtitleBottomPaddingFraction, vm.playerSettings.assEffectsEnabled) {
+        engine.setAssEffectsEnabled(vm.playerSettings.assEffectsEnabled)
+        engine.applySubtitleStyle(vm.playerSettings.textColor, vm.playerSettings.strokeColor,
+            vm.playerSettings.subtitleSize, vm.playerSettings.vttBold, vm.playerSettings.vttOutlineWidth,
+            vm.playerSettings.subtitleBottomPaddingFraction, false)
+    }
+
+    // Retain the original format/style and complete timeline. Every published
+    // revision is a complete new file; never unload/reload the selected file.
     LaunchedEffect(engine, currentEpisode.id, subtitleTranslationMode, vm.playerSettings.translationProvider, localSubtitle) {
         if (subtitleTranslationMode != "korean") {
             setSubtitleVisibleForMode(subtitleEnabled)
@@ -541,41 +558,54 @@ fun PlayerScreen(
         // Each effect owns its worker/cache. A cancelled effect can finish its
         // suspending cleanup after the next file/provider effect has started.
         // Sharing a remembered translator lets that cleanup clear the new session.
-        val realtimeTranslator = RealtimeSubtitleTranslator(context.applicationContext)
-        val source = localSubtitle ?: engine.currentSubtitleFilePath
-        val projected = File.createTempFile("translated-", ".ass", context.cacheDir)
+        val realtimeTranslator = RealtimeSubtitleTranslator(context.applicationContext, providerFactory = { id ->
+            translationProviderFactory?.invoke(context, id)
+                ?: com.lilac.anime.data.subtitle.translation.TranslationManager.createProvider(context, id)
+        })
+        var source = localSubtitle
+        val sessionEngine = engine
+        val sessionEpisode = currentEpisode.id
+        var track: TranslatedSubtitleTrack? = null
+        val output = object : TranslatedSubtitleTrack.Output {
+            override val selectedPath get() = if (engine === sessionEngine) sessionEngine.currentSubtitleFilePath else null
+            override val ready get() = engine === sessionEngine && currentEpisode.id == sessionEpisode &&
+                subtitleTranslationMode == "korean" && (localSubtitle == null || localSubtitle == source) &&
+                sessionEngine.playbackState == MpvPlayerEngine.STATE_READY
+            override val mediaGeneration get() = sessionEngine.activeLoadGeneration
+            override fun select(path: String): Boolean {
+                if (engine !== sessionEngine || currentEpisode.id != sessionEpisode ||
+                    (localSubtitle != null && localSubtitle != source)) return false
+                return sessionEngine.replaceSubtitleTrack(path)
+            }
+        }
         try {
             while (isActive) {
-                val subtitleTime = engine.currentPosition - subtitleSyncMs
-                realtimeTranslator.ensurePrepared(source, subtitleTime, this, vm.playerSettings.translationProvider)
-                realtimeTranslator.updatePlaybackPosition(subtitleTime)
-                realtimeTranslator.nativeTrackSnapshot()?.let { snapshot ->
-                    withContext(Dispatchers.IO) {
-                        val atomic = android.util.AtomicFile(projected)
-                        val stream = atomic.startWrite()
-                        try { stream.write(snapshot.toByteArray(Charsets.UTF_8)); atomic.finishWrite(stream) }
-                        catch (error: Throwable) { atomic.failWrite(stream); throw error }
+                try {
+                    if (source == null) source = engine.currentSubtitleFilePath?.takeIf { File(it).isFile }
+                    source?.let { original ->
+                        translationSourcePath = original
+                        if (track == null) track = TranslatedSubtitleTrack(context.cacheDir, original, output)
+                        val subtitleTime = engine.currentPosition - subtitleSyncMs
+                        realtimeTranslator.ensurePrepared(original, subtitleTime, this, vm.playerSettings.translationProvider)
+                        realtimeTranslator.updatePlaybackPosition(subtitleTime)
+                        track!!.update(realtimeTranslator.nativePlaybackSnapshot())
                     }
-                    if (engine.currentSubtitleFilePath == projected.absolutePath) engine.reloadCurrentSubtitle()
-                    else engine.replaceSubtitleTrack(projected.absolutePath)
-                }
-                // FILE_LOADED can attach the original after the first snapshot
-                // was published. Reattach the completed snapshot without waiting
-                // for another API response or rewriting an unchanged file.
-                if (projected.length() > 0L && engine.playbackState == MpvPlayerEngine.STATE_READY &&
-                    engine.currentSubtitleFilePath != projected.absolutePath) {
-                    engine.replaceSubtitleTrack(projected.absolutePath)
+                    translationProgress = realtimeTranslator.playbackProgress()
+                    translationTrackError = track?.lastAttachFailed == true
+                } catch (cancel: CancellationException) { throw cancel }
+                catch (failure: Exception) {
+                    translationTrackError = true
+                    Log.e("SubtitlePlayback", "TRANSLATED_TRACK_UPDATE_FAILED_KEEP_SOURCE", failure)
                 }
                 engine.setSubtitleVisible(subtitleEnabled)
                 delay(100L)
             }
         } finally {
-            if (engine.currentSubtitleFilePath == projected.absolutePath && source != null) {
-                engine.replaceSubtitleTrack(source)
+            withContext(NonCancellable) {
+                track?.close()
                 engine.setSubtitleVisible(subtitleEnabled)
+                realtimeTranslator.clear()
             }
-            withContext(NonCancellable) { realtimeTranslator.clear() }
-            projected.delete()
         }
     }
 
@@ -1009,6 +1039,8 @@ fun PlayerScreen(
 
 
     fun startInitialSubtitlePlayback(choices: List<SubtitleDiscoveryService.Choice>) {
+        val requestedEngine = engine
+        val actionRevision = engine.playbackActionRevision
         subtitleDiscoveryLoading = false
         subtitleApplying = true
         subtitleRequestError = null
@@ -1020,8 +1052,8 @@ fun PlayerScreen(
                     subtitleSelectionNeedsUserChoice = false
                     subtitleTranslationMode = if (initialTranslationMode == "korean" && choices.firstOrNull()?.language != "한국어") "korean" else "original"
                     setSubtitleVisibleForMode(subtitleEnabled)
-                    engine.play()
-                    MainActivity.isVideoPlaying = true
+                    if (engine === requestedEngine) engine.playIfUnchanged(actionRevision)
+                    MainActivity.isVideoPlaying = engine.isPlaying
                 } else subtitleRequestError = "선택한 자막 파일을 불러오지 못했습니다. 다른 파일을 선택하거나 자막 없이 재생하세요."
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1159,6 +1191,7 @@ fun PlayerScreen(
     // 2) Re:ANIME is resolved by the hidden WebView + FlixCloud decrypting proxy;
     // 3) LinkKF keeps its direct resolver path.
     LaunchedEffect(currentEpisode.id, currentEpisode.videoUrl, playbackGeneration) {
+        val actionRevision = engine.playbackActionRevision
         val generation = playbackGeneration
         val requestedEpisodeId = currentEpisode.id
         val requestedEpisodeNumber = currentEpisode.number
@@ -1181,6 +1214,7 @@ fun PlayerScreen(
 
         offlineResolutionComplete = true
         if (offlinePath != null) {
+            val saved = vm.getProgress(anime.id, currentEpisode.id, currentEpisode.number)
             offlinePlaybackActive = true
             streamUrl = offlinePath
             streamHeaders = null
@@ -1204,7 +1238,7 @@ fun PlayerScreen(
                 syncOffsetMs = vm.playerSettings.syncOffsetMs,
                 customFontPath = vm.playerSettings.subtitleFontPath
                     ?: vm.playerSettings.customFontPath,
-                autoPlay = !subtitleSelectionOpen
+                autoPlay = !subtitleSelectionOpen && engine.playbackActionRevision == actionRevision
             )
             engine.setAssEffectsEnabled(vm.playerSettings.assEffectsEnabled)
             engine.setSpeed(speed)
@@ -1218,18 +1252,15 @@ fun PlayerScreen(
                 vm.playerSettings.subtitleBottomPaddingFraction,
                 false
             )
-            repeat(60) {
-                if (engine.duration > 0L) return@repeat
-                delay(100)
-            }
-            val saved = vm.getProgress(anime.id, currentEpisode.id, currentEpisode.number)
+            kotlinx.coroutines.withTimeoutOrNull(6000) { while (engine.duration <= 0L) delay(100) }
             val resume = com.lilac.anime.data.PlaybackHistory.resumePosition(engine.duration, saved?.progress ?: 0f)
-            if (resume > 0L && engine.duration > 0L) {
+            if (resume > 0L && engine.duration > 0L && engine.playbackActionRevision == actionRevision) {
                 engine.seekTo(resume.coerceAtMost(engine.duration - 250L))
             }
             if (!subtitleSelectionOpen) {
-                engine.play()
-                MainActivity.isVideoPlaying = true
+                // FILE_LOADED and the explicit subtitle-play click own autoplay.
+                // This resolver may finish after the user has paused/rewound.
+                MainActivity.isVideoPlaying = engine.isPlaying
             }
             loading = false
             return@LaunchedEffect
@@ -1622,16 +1653,15 @@ fun PlayerScreen(
         if (!subtitleSelectionOpen) {
             MainActivity.isVideoPlaying = true
         }
-        repeat(80) {
-            if (!isActive || generation != playbackGeneration) return@LaunchedEffect
+        val resumeRevision = engine.playbackActionRevision
+        kotlinx.coroutines.withTimeoutOrNull(8000) { while (engine.duration <= 0L) delay(100) }
+        if (isActive && generation == playbackGeneration && engine.playbackActionRevision == resumeRevision) {
             if (engine.duration > 0L) {
                 val resume = com.lilac.anime.data.PlaybackHistory.resumePosition(engine.duration, saved?.progress ?: 0f)
                 if (resume > 0L) {
                     engine.seekTo(resume.coerceAtMost((engine.duration - 250L).coerceAtLeast(0L)))
                 }
-                return@repeat
             }
-            delay(100)
         }
     }
 
@@ -1962,6 +1992,17 @@ fun PlayerScreen(
         )
         }
 
+        if (subtitleTranslationMode == "korean" && (controlsVisible || translationProgress.error != null || translationTrackError)) {
+            val message = when {
+                translationTrackError || translationProgress.error != null -> "번역 실패 · 원문 표시 중 (AI 설정 확인)"
+                translationProgress.completed == 0 -> "번역 준비 중 · 원문 표시 중"
+                else -> "번역 ${translationProgress.completed}/${translationProgress.total} · 미완료 구간은 원문 표시"
+            }
+            Text(message, color = Color.White, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(top = 64.dp, start = 16.dp)
+                    .background(Color.Black.copy(alpha = .65f), RoundedCornerShape(6.dp)).padding(8.dp))
+        }
+
         LaunchedEffect(isTv, controlsVisible, settingsOpen) {
             if (isTv) {
                 if (controlsVisible && !settingsOpen) tvPlayRequester.requestFocus()
@@ -1983,10 +2024,10 @@ fun PlayerScreen(
 
         // Mobile controls auto-hide after exactly 2 seconds. Opening the settings
         // menu keeps the controls alive until the menu is dismissed.
-        LaunchedEffect(isTv, controlsVisible, settingsOpen, locked) {
-            if (!isTv && controlsVisible && !settingsOpen && !locked) {
+        LaunchedEffect(isTv, controlsVisible, isPlaying, settingsOpen, locked) {
+            if (!isTv && controlsVisible && isPlaying && !settingsOpen && !locked) {
                 delay(2000)
-                if (isActive && !settingsOpen && !locked) {
+                if (isActive && isPlaying && !settingsOpen && !locked) {
                     controlsVisible = false
                 }
             }
@@ -2131,7 +2172,7 @@ fun PlayerScreen(
                                     }
                                     Spacer(Modifier.height(20.dp))
                                     Text("자막 크기 · ${subtitleSize.toInt()}%", color = Color.White.copy(.7f), fontSize = 14.sp)
-                                    Slider(value = subtitleSize.coerceIn(50f, 200f), onValueChange = { subtitleSize = it; engine.applySubtitleStyle(vm.playerSettings.textColor, vm.playerSettings.strokeColor, it, vttBold, vm.playerSettings.vttOutlineWidth, vm.playerSettings.subtitleBottomPaddingFraction, false) }, valueRange = 50f..200f, modifier = Modifier.fillMaxWidth())
+                                    Slider(value = subtitleSize.coerceIn(50f, 200f), onValueChange = { subtitleSize = it; engine.applySubtitleStyle(vm.playerSettings.textColor, vm.playerSettings.strokeColor, it, vttBold, vm.playerSettings.vttOutlineWidth, vm.playerSettings.subtitleBottomPaddingFraction, false) }, valueRange = 50f..200f, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "자막 크기" })
                                     Surface(onClick = { vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSize = subtitleSize)); settingsOpen = false }, modifier = Modifier.focusable(), shape = RoundedCornerShape(12.dp), color = Color.White.copy(.10f)) { Text("적용", color = Color.White, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) }
                                 }
                                 "화면" -> {
@@ -2412,8 +2453,10 @@ fun PlayerScreen(
                     Column(
                         modifier = Modifier
                             .padding(vertical = 6.dp)
-                            .heightIn(max = 660.dp)
-                            .verticalScroll(rememberScrollState())
+                            // DropdownMenu already owns the bounded scroll area.
+                            // A second 660dp viewport lets buttons appear visible
+                            // to its inner scroll while remaining off the screen.
+                            .fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -2708,11 +2751,16 @@ fun PlayerScreen(
                                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp)
                             ) {
                                 listOf("original" to "원본 그대로", "korean" to "AI 한국어 번역").forEach { (mode, label) ->
-                                    Surface(
+                                    FilterChip(
+                                        selected = subtitleTranslationMode == mode,
                                         onClick = {
+                                            Log.i("SubtitlePlayback", "MODE_SELECTED mode=$mode")
                                             subtitleTranslationMode = mode
                                             if (mode == "original") {
                                                 realtimeSubtitleText = ""
+                                                // Restore immediately. Coroutine cancellation/IO cleanup
+                                                // can finish after the click, and must not own this UI action.
+                                                (localSubtitle ?: translationSourcePath)?.let { engine.replaceSubtitleTrack(it) }
                                                 setSubtitleVisibleForMode(subtitleEnabled)
                                             } else {
                                                 // LaunchedEffect owns translator lifecycle. Do not call prepare here as
@@ -2720,16 +2768,12 @@ fun PlayerScreen(
                                                 setSubtitleVisibleForMode(subtitleEnabled)
                                             }
                                         },
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = if (subtitleTranslationMode == mode) Color.White else Color.White.copy(.10f)
-                                    ) {
-                                        Text(
-                                            label,
-                                            color = if (subtitleTranslationMode == mode) Color.Black else Color.White,
-                                            fontSize = 9.sp,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                                        )
-                                    }
+                                        modifier = Modifier.heightIn(min = 48.dp),
+                                        label = { Text(label, fontSize = 11.sp) },
+                                        colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+                                            containerColor = Color.White.copy(.10f), labelColor = Color.White,
+                                            selectedContainerColor = Color.White, selectedLabelColor = Color.Black),
+                                    )
                                 }
                             }
 
@@ -2770,6 +2814,7 @@ fun PlayerScreen(
                             Text("자막 크기 ${subtitleSize.toInt()}%", color = Color.White.copy(.72f), fontSize = 11.sp)
                             Slider(
                                 value = subtitleSize,
+                                modifier = Modifier.semantics { contentDescription = "자막 크기" },
                                 onValueChange = {
                                     subtitleSize = it
                                     vm.updatePlayerSettings(context, vm.playerSettings.copy(subtitleSize = it))

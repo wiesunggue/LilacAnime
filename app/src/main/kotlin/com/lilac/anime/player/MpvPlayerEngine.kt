@@ -97,6 +97,8 @@ class MpvPlayerEngine(private val context: Context) {
         private set
     @Volatile var activeLoadGeneration: Long = 0L
         private set
+    @Volatile var playbackActionRevision: Long = 0L
+        private set
 
     /** Counts genuine libmpv END_FILE events. */
     @Volatile
@@ -156,6 +158,13 @@ class MpvPlayerEngine(private val context: Context) {
     private var pendingSubtitlePath: String? = null
     private var currentSubtitlePath: String? = null
     private var currentSubtitleIsAss: Boolean = false
+    @Volatile private var subtitleVisible = true
+    @Volatile private var assEffectsEnabled = true
+    private data class SubtitleAppearance(
+        val textColor: Int, val borderColor: Int, val sizePercent: Float,
+        val bold: Boolean, val outlineWidth: Float, val bottom: Float, val pip: Boolean,
+    )
+    @Volatile private var subtitleAppearance: SubtitleAppearance? = null
     private var playWhenLoaded: Boolean = false
     private var loadGeneration: Long = 0L
 
@@ -227,12 +236,9 @@ class MpvPlayerEngine(private val context: Context) {
                     }
                     if (playWhenLoaded) {
                         playWhenLoaded = false
-                        // Some remote HLS replacements report FILE_LOADED while
-                        // mpv is still settling the demuxer. Issue both the pause
-                        // property change and an explicit play command so the new
-                        // episode cannot remain in a paused READY state.
+                        // Start through mpv's pause property. There is no "play"
+                        // command in mpv's client API.
                         runCatching { mpv.setPropertyBoolean("pause", false) }
-                        runCatching { mpv.command(arrayOf("play")) }
                         isPlaying = true
                     }
                 }
@@ -1234,34 +1240,40 @@ vec4 hook() {
     val currentSubtitleFilePath: String?
         get() = currentSubtitlePath?.removePrefix("file://")?.let { File(it).absolutePath }
 
-    fun replaceSubtitleTrack(path: String?) {
-        val value = path?.takeIf { it.isNotBlank() } ?: return
+    @Synchronized
+    fun replaceSubtitleTrack(path: String?): Boolean {
+        val value = path?.takeIf { it.isNotBlank() } ?: return false
         val sub = if (value.startsWith("http://", true) || value.startsWith("https://", true)) {
             value
         } else {
             File(value.removePrefix("file://")).absolutePath
         }
-        // `sub-remove` can legitimately fail when no external subtitle track is
-        // currently loaded. Do NOT put it in the same runCatching as `sub-add`:
-        // otherwise a harmless remove failure prevents the VTT from ever being
-        // added. This was especially easy to hit on the first Linkkf VTT attach.
-        runCatching {
-            mpv.command(arrayOf("sub-remove"))
-        }.onFailure {
-            Log.d(TAG, "SUB_REMOVE_IGNORED path=$sub reason=${it.message}")
-        }
-
-        runCatching {
+        val remote = sub.startsWith("http://", true) || sub.startsWith("https://", true)
+        if (!remote && (!File(sub).isFile || File(sub).length() == 0L)) return false
+        val oldPath = currentSubtitlePath
+        val oldId = runCatching { mpv.getPropertyString("sid")?.toIntOrNull() }.getOrNull()
+        val media = activeLoadGeneration
+        return runCatching {
             Log.d(TAG, "SUB_ADD path=$sub exists=${File(sub.removePrefix("file://")).isFile} url=${sub.startsWith("http://", true) || sub.startsWith("https://", true)}")
             mpv.command(arrayOf("sub-add", sub, "select"))
-            mpv.setPropertyBoolean("sub-visibility", true)
-            mpv.setPropertyString("sub-auto", "no")
+            val newId = mpv.getPropertyString("sid")?.toIntOrNull()
+            check(newId != null && (newId != oldId || oldPath == sub)) { "New subtitle was not selected" }
+            if (media != activeLoadGeneration) return@runCatching false
             currentSubtitlePath = sub
             currentSubtitleIsAss = sub.isAssLike()
+            applyRememberedSubtitleStyle()
+            mpv.setPropertyBoolean("sub-visibility", subtitleVisible)
+            mpv.setPropertyString("sub-auto", "no")
+            // Removing first loses the original even if parsing/loading the new
+            // file fails. Remove only the old external track after selection.
+            if (oldPath != null && oldId != null && oldId != newId) {
+                runCatching { mpv.command(arrayOf("sub-remove", oldId.toString())) }
+            }
             Log.d(TAG, "SUB_ADD_OK path=$sub")
+            true
         }.onFailure {
             Log.e(TAG, "SUB_ADD_FAILED path=$sub", it)
-        }
+        }.getOrDefault(false)
     }
 
     fun reloadCurrentSubtitle() {
@@ -1278,6 +1290,7 @@ vec4 hook() {
     }
 
     fun setSubtitleVisible(visible: Boolean) {
+        subtitleVisible = visible
         runCatching { mpv.setPropertyBoolean("sub-visibility", visible) }
     }
 
@@ -1314,11 +1327,20 @@ vec4 hook() {
         subtitleText = ""
     }
 
+    @Synchronized
     fun play() {
+        playbackActionRevision++
         runCatching { mpv.setPropertyBoolean("pause", false) }
-        runCatching { mpv.command(arrayOf("play")) }
         isPlaying = true
         playbackState = STATE_READY
+    }
+
+    /** Late subtitle/download completion cannot undo a newer pause or seek. */
+    @Synchronized
+    fun playIfUnchanged(revision: Long): Boolean {
+        if (playbackActionRevision != revision) return false
+        play()
+        return true
     }
 
     /**
@@ -1343,16 +1365,24 @@ vec4 hook() {
         mpv.command(arrayOf("screenshot-to-file", outputPath, "video"))
     }
 
+    @Synchronized
     fun pause() {
+        playbackActionRevision++
+        playWhenLoaded = false
         mpv.setPropertyBoolean("pause", true)
         isPlaying = false
     }
 
+    @Synchronized
     fun seekBy(seconds: Double) {
+        playbackActionRevision++
         mpv.command(arrayOf("seek", seconds.toString(), "relative+exact"))
     }
 
+    @Synchronized
     fun seekTo(positionMs: Long) {
+        playbackActionRevision++
+        currentPosition = positionMs.coerceAtLeast(0L)
         mpv.command(
             arrayOf(
                 "seek",
@@ -1383,10 +1413,8 @@ vec4 hook() {
      * ASS override tags/effects; "no" preserves the original ASS effects.
      */
     fun setAssEffectsEnabled(enabled: Boolean) {
-        mpv.setOptionString("sub-ass-override", if (enabled) "no" else "strip")
-        if (currentSubtitleIsAss && currentSubtitlePath != null) {
-            runCatching { mpv.command(arrayOf("sub-reload")) }
-        }
+        assEffectsEnabled = enabled
+        applyRememberedSubtitleStyle()
     }
 
     fun applySubtitleStyle(
@@ -1399,11 +1427,24 @@ vec4 hook() {
         pip: Boolean,
         ass: Boolean = currentSubtitleIsAss
     ) {
-        // ASS/SSA must keep the script's own Style.Fontname and FontSize.
-        // SRT has no ASS-style font/size/color metadata, so mpv/libass uses the
-        // generic subtitle settings below for SRT. This is intentional: it makes
-        // SRT follow the player's font, size, color, bold and outline controls.
-        if (ass) return
+        subtitleAppearance = SubtitleAppearance(textColor, borderColor, sizePercent, bold, outlineWidth, bottomPaddingFraction, pip)
+        applyRememberedSubtitleStyle(ass)
+    }
+
+    private fun applyRememberedSubtitleStyle(ass: Boolean = currentSubtitleIsAss) {
+        mpv.setPropertyString("sub-ass-override", if (ass) { if (assEffectsEnabled) "scale" else "strip" } else "yes")
+        val style = subtitleAppearance
+        if (ass) {
+            // Relative scaling preserves script colours/fonts/effects, unlike
+            // forcing a generic style or ignoring the user's size slider.
+            val scale = (style?.sizePercent ?: 100f) / 100f * if (style?.pip == true) .48f else 1f
+            mpv.setPropertyDouble("sub-scale", scale.coerceIn(.1f, 4f).toDouble())
+            runCatching { mpv.setPropertyBoolean("sub-scale-signs", true) }
+            return
+        }
+        mpv.setPropertyDouble("sub-scale", 1.0)
+        if (style == null) return
+        val (textColor, borderColor, sizePercent, bold, outlineWidth, bottomPaddingFraction, pip) = style
 
         setMpvColor("sub-color", textColor)
         setMpvColor("sub-border-color", borderColor)
@@ -1483,16 +1524,11 @@ vec4 hook() {
         // Keep subtitles inside the actual video frame. When this is enabled,
         // mpv may place subtitle pixels into letterbox/pillarbox margins.
         mpv.setOptionString("sub-use-margins", "no")
-        mpv.setOptionString("sub-ass-override", "no")
+        mpv.setPropertyString("sub-ass-override", if (currentSubtitleIsAss) { if (assEffectsEnabled) "scale" else "strip" } else "yes")
         mpv.setPropertyDouble("sub-delay", syncOffsetMs / 1000.0)
         // ASS keeps its script-defined font family, FontSize, outline and weight.
         // Do not set sub-font-size here: that generic mpv setting is what can make
         // an ASS subtitle change size when a different font is selected.
-        if (currentSubtitleIsAss) {
-            mpv.setOptionString("sub-ass-override", "no")
-        } else {
-            mpv.setOptionString("sub-ass-override", "yes")
-        }
         mpv.setPropertyBoolean("sub-visibility", false)
         pendingSubtitlePath = subtitlePath?.takeIf { it.isNotBlank() }
         Log.d(TAG, "LOAD generation=$loadGeneration url=$url subtitle=$subtitlePath")
@@ -1501,32 +1537,21 @@ vec4 hook() {
 
     private fun String.isAssLike(): Boolean {
         val clean = substringBefore('?').substringBefore('#').lowercase(Locale.ROOT)
-        return clean.endsWith(".ass") || clean.endsWith(".ssa")
+        if (clean.endsWith(".ass") || clean.endsWith(".ssa")) return true
+        if (startsWith("http://", true) || startsWith("https://", true)) return false
+        return runCatching {
+            val file = File(removePrefix("file://"))
+            val header = file.inputStream().use { input ->
+                val bytes = ByteArray(8192)
+                val count = input.read(bytes).coerceAtLeast(0)
+                String(bytes, 0, count, Charsets.UTF_8)
+            }
+            header.contains("[Script Info]", true) || header.contains("[V4+ Styles]", true)
+        }.getOrDefault(false)
     }
 
     private fun addSubtitleTrack(subtitlePath: String) {
-        val sub = if (
-            subtitlePath.startsWith("http://", true) ||
-            subtitlePath.startsWith("https://", true)
-        ) {
-            subtitlePath
-        } else {
-            File(subtitlePath.removePrefix("file://")).absolutePath
-        }
-
-        if (sub.isBlank()) return
-
-        runCatching {
-            Log.d(TAG, "SUB_ADD path=$sub")
-            mpv.command(arrayOf("sub-add", sub, "select"))
-            currentSubtitlePath = sub
-            // All external subtitle formats are rendered by mpv/libass. For ASS/SSA
-            // libass preserves script positioning/styles; VTT/SRT use mpv's native
-            // text renderer and therefore do not need the old Compose TextView.
-            mpv.setPropertyBoolean("sub-visibility", true)
-        }.onFailure {
-            Log.e(TAG, "SUB_ADD_FAILED path=$sub", it)
-        }
+        replaceSubtitleTrack(subtitlePath)
     }
 
     fun release() {

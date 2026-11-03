@@ -184,6 +184,15 @@ internal object SubtitleFormatTranslator {
     private fun readSubtitleText(file: File): String? {
         val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
         if (bytes.isEmpty()) return null
+        if (bytes.none { it == 0.toByte() }) {
+            val utf8 = runCatching {
+                Charsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
+            }.getOrNull()
+            if (utf8 != null) return utf8
+        }
         val candidates = mutableListOf<Charset>()
         when {
             bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte() -> candidates += Charsets.UTF_8
@@ -239,10 +248,9 @@ internal object SubtitleFormatTranslator {
         val normalized = SubtitleMarkup.plainText(translated)
         return when (kind) {
             "ass" -> {
-                val tags = Regex("\\{[^}]*\\}").findAll(original).map { it.value }.toList()
-                val text = normalized.replace("\n", "\\N")
-                if (tags.isEmpty()) text else tags.joinToString("") + text
+                SubtitleMarkup.restoreAssMarkup(original, translated)
             }
+            "srt", "vtt", "smi", "sami", "ttml", "xml" -> SubtitleMarkup.restoreNativeMarkup(original, translated)
             else -> {
                 normalized.replace("\\N", "\n")
             }
@@ -251,26 +259,16 @@ internal object SubtitleFormatTranslator {
 
     private fun parseAss(c: String): List<Cue> {
         val lines = c.lines()
-        val japaneseRegex = Regex("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff々ー]")
-        val firstJapaneseDialogueLine = lines.indexOfFirst { line ->
-            if (!line.startsWith("Dialogue:", true)) return@indexOfFirst false
-            val body = line.substringAfter(':').trimStart()
-            val parts = body.split(',', limit = 10)
-            parts.size >= 10 && japaneseRegex.containsMatchIn(parts[9])
-        }
-        if (firstJapaneseDialogueLine < 0) {
-            Log.w("SubtitleProfile", "ASS_FIRST_JAPANESE_NOT_FOUND")
-            return emptyList()
-        }
-        Log.d("SubtitleProfile", "ASS_FIRST_JAPANESE_LINE line=${firstJapaneseDialogueLine + 1}")
         var cueIndex = 0
-        return lines.mapIndexedNotNull { idx, line ->
-            if (idx < firstJapaneseDialogueLine || !line.startsWith("Dialogue:", true)) return@mapIndexedNotNull null
+        return lines.mapNotNull { line ->
+            if (!line.trimStart().startsWith("Dialogue:", true)) return@mapNotNull null
             val body = line.substringAfter(':').trimStart()
             val parts = body.split(',', limit = 10)
-            if (parts.size < 10) return@mapIndexedNotNull null
-            val start = assTime(parts[1]) ?: return@mapIndexedNotNull null
-            val end = assTime(parts[2]) ?: return@mapIndexedNotNull null
+            if (parts.size < 10) return@mapNotNull null
+            val start = assTime(parts[1]) ?: return@mapNotNull null
+            val end = assTime(parts[2]) ?: return@mapNotNull null
+            if (SubtitleMarkup.isAssDrawing(parts[9])) return@mapNotNull null
+            if (end <= start || !Regex("\\p{L}").containsMatchIn(SubtitleMarkup.plainText(parts[9]))) return@mapNotNull null
             Cue(start, end, parts[9].trim(), line, "ass", cueIndex++)
         }
     }
@@ -377,7 +375,6 @@ internal object SubtitleFormatTranslator {
                 val end = assTime(parts[2]) ?: return@map line
                 val rawText = parts[9].trim()
                 val cue = cues.firstOrNull { it.kind == "ass" && it.startMs == start && it.endMs == end && it.text.trim() == rawText }
-                    ?: cues.firstOrNull { it.kind == "ass" && it.startMs == start && it.endMs == end }
                     ?: return@map line
                 val t = restoreTags(cue.text, translated[cue.index] ?: cue.text, cue.kind)
                 val mutable = parts.toMutableList()

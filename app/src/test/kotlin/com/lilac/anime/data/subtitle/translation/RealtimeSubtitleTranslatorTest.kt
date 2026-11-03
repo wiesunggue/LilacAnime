@@ -271,4 +271,84 @@ Dialogue: 1,0:00:02.50,0:00:04.00,Default,,0,0,0,,World
         translator.clear()
     }
 
+    @Test fun playbackKeepsSrtFormatColoursAndPendingCuesWhileTranslationIsSlow() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val sourceText = "1\n00:00:00,000 --> 00:00:01,000\n<font color=\"#00ff00\"><b>Hello</b></font>\n\n2\n00:00:02,000 --> 00:00:03,000\n<font color=\"#ff0000\">Later</font>\n"
+        val source = file(sourceText)
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), {
+            Provider { lines -> gate.await(); lines.map { "안녕" } }
+        })
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini"); runCurrent()
+        assertNull("Translation button must not replace the styled source with an unstyled ASS", translator.nativePlaybackSnapshot())
+        gate.complete(Unit); runCurrent()
+        val snapshot = translator.nativePlaybackSnapshot()!!
+        assertEquals("srt", snapshot.extension)
+        assertEquals(sourceText.replace("Hello", "안녕"), snapshot.content)
+        assertNull(translator.nativePlaybackSnapshot())
+        translator.clear()
+    }
+
+    @Test fun playbackKeepsVttCssCueIdsSettingsAndSpeakerMarkup() = runTest {
+        val sourceText = "WEBVTT\n\nSTYLE\n::cue(.green) { color: lime; }\n\nNOTE preserve this metadata\n\ncue-one\n00:00:00.000 --> 00:00:01.000 line:10% position:25% align:start\n<v Speaker><c.green>Hello</c></v>\n\ncue-two\n00:00:02.000 --> 00:00:03.000\nUntranslated\n"
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider { it.map { "안녕" } } })
+        translator.playbackTick(file(sourceText, "vtt").path, 100, backgroundScope, "gemini"); runCurrent()
+        val snapshot = translator.nativePlaybackSnapshot()!!
+        assertEquals("vtt", snapshot.extension)
+        assertEquals(sourceText.replace("Hello", "안녕"), snapshot.content)
+        translator.clear()
+    }
+
+    @Test fun playbackPreservesSamiStylesAndSyncClearEvents() = runTest {
+        val sourceText = "<SAMI>\n<HEAD><STYLE>.JPCC { color: yellow; }</STYLE></HEAD>\n<BODY>\n<SYNC Start=0><P Class=JPCC><FONT COLOR=\"red\">Hello</FONT>\n<SYNC Start=1000><P Class=JPCC>&nbsp;\n</BODY></SAMI>"
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider { it.map { "안녕" } } })
+        translator.playbackTick(file(sourceText, "smi").path, 100, backgroundScope, "gemini"); runCurrent()
+        val snapshot = translator.nativePlaybackSnapshot()!!
+        assertEquals("smi", snapshot.extension)
+        assertTrue(snapshot.content.contains("<STYLE>.JPCC { color: yellow; }</STYLE>"))
+        assertTrue(snapshot.content.contains("<P Class=JPCC><FONT COLOR=\"red\">안녕</FONT>"))
+        assertTrue(snapshot.content.contains("<SYNC Start=1000><P Class=JPCC>&nbsp;"))
+        translator.clear()
+    }
+
+    @Test fun playbackKeepsEarlierTranslationAfterLaterCueCompletesAndRewind() = runTest {
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        val source = file(srt(12))
+        for (i in 0 until 12) {
+            translator.playbackTick(source.path, i * 2000L + 100, backgroundScope, "gemini"); advanceTimeBy(200); runCurrent()
+            val snapshot = translator.nativePlaybackSnapshot()!!
+            assertEquals("srt", snapshot.extension)
+            for (translated in 0..i) assertTrue("Previously translated cue $translated disappeared at $i", snapshot.content.contains("번역 Line $translated"))
+            assertEquals(12, snapshot.content.lines().count { it.contains(" --> ") })
+        }
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini"); runCurrent()
+        assertEquals(12, translator.playbackProgress().completed)
+        assertNull(translator.nativePlaybackSnapshot()) // selected track remains valid during rewind
+        translator.clear()
+    }
+
+    @Test fun failedProviderKeepsSourceSelectedAndExposesFailureState() = runTest {
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider { error("HTTP 401") } }, { false })
+        translator.playbackTick(file(srt(3)).path, 100, backgroundScope, "gemini"); advanceTimeBy(1000); runCurrent()
+        assertNull(translator.nativePlaybackSnapshot())
+        assertNotNull(translator.playbackProgress().error)
+        assertEquals(0, translator.playbackProgress().completed)
+        translator.clear()
+    }
+
+    @Test fun playbackPreservesAssDrawingCommandsInsteadOfSendingThemToTheModel() = runTest {
+        val drawing = "Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\\p1}m 0 0 l 30 0 30 30{\\p0}"
+        val sourceText = "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n$drawing\nDialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,Hello"
+        val received = mutableListOf<String>()
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), {
+            Provider { lines -> received += lines; lines.map { "번역문" } }
+        })
+        translator.playbackTick(file(sourceText, "ass").path, 100, backgroundScope, "gemini"); runCurrent()
+        assertEquals(listOf("Hello"), received)
+        val snapshot = translator.nativePlaybackSnapshot()!!
+        assertEquals("ass", snapshot.extension)
+        assertTrue(snapshot.content.contains(drawing))
+        assertTrue(snapshot.content.contains("번역문"))
+        translator.clear()
+    }
+
 }
