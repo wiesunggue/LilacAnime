@@ -61,7 +61,10 @@ class MpvPlayerEngine(private val context: Context) {
     }
     private val fontsDir = File(context.filesDir, "mpv_fonts").apply { mkdirs() }
     private val upscalingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mpv: MPVLib = requireNotNull(MPVLib.create(context.applicationContext)) {
+    private val mpv: MPVLib = requireNotNull(run {
+        SubtitleFontConfig.prepare(context.applicationContext)
+        MPVLib.create(context.applicationContext)
+    }) {
         "libmpv initialization failed"
     }
 

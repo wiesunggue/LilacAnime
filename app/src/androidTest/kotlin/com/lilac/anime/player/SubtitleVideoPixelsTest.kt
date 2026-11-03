@@ -20,8 +20,11 @@ class SubtitleVideoPixelsTest {
         val context = ins.targetContext
         val video = File(context.cacheDir, "audit-black.mp4")
         ins.context.assets.open("black.mp4").use { input -> video.outputStream().use { input.copyTo(it) } }
+        // At 640x360, the original short "Line 1" fixture rendered only 43
+        // bright pixels despite being visible. Use a complete source sentence;
+        // retain the >80 visible / <20 hidden criteria and every expected cue.
         val source = File(context.cacheDir, "pixel-source.srt").apply {
-            writeText((0 until 12).joinToString("\n\n") { i -> "${i+1}\n00:00:%02d,000 --> 00:00:%02d,999\nLine $i".format(i,i) })
+            writeText((0 until 12).joinToString("\n\n") { i -> "${i+1}\n00:00:%02d,000 --> 00:00:%02d,999\nSource subtitle Line $i".format(i,i) })
         }
         context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", 10).commit()
         val gate = CompletableDeferred<Unit>()
@@ -29,7 +32,7 @@ class SubtitleVideoPixelsTest {
             object : TranslationProvider {
                 override val id = "gemini"
                 override val displayName = "pixel-test"
-                override suspend fun translateBatch(lines: List<String>): List<String> { gate.await(); delay(300); return lines.map { "한국어 대사 $it" } }
+                override suspend fun translateBatch(lines: List<String>): List<String> { gate.await(); delay(300); return lines.map { "한국어 대사 ${it.removePrefix("Source subtitle ")}" } }
             }
         })
         val workers = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -73,7 +76,10 @@ class SubtitleVideoPixelsTest {
         try {
             withTimeout(5000) { while (!surface.isAvailable) delay(50) }
             ins.runOnMainSync { engine.load(video.path, source.path,0,null) }
-            withTimeout(8000) { while (engine.playbackState!=MpvPlayerEngine.STATE_READY || engine.videoWidth==0) delay(50) }
+            // Cold libass/fontconfig setup took ~14s on the software emulator.
+            // This is media startup, not a subtitle visibility assertion; retain
+            // the separate 8s pixel deadlines after the player becomes ready.
+            withTimeout(60000) { while (engine.playbackState!=MpvPlayerEngine.STATE_READY || engine.videoWidth==0) delay(50) }
             ins.runOnMainSync { engine.pause(); engine.seekTo(1100) }
             translator.ensurePrepared(source.path,1100,workers,"gemini")
             projected.writeText(translator.nativeTrackSnapshot()!!)
@@ -92,6 +98,7 @@ class SubtitleVideoPixelsTest {
             assertTrue(engine.getCurrentSubtitleText().contains("한국어"))
             ins.runOnMainSync { engine.setSubtitleVisible(true); engine.setSpeed(2f); engine.play() }
             val seen = mutableSetOf<Int>()
+            val captureTimings = mutableListOf<String>()
             withTimeout(10000) {
                 while (engine.currentPosition < 8100) {
                     val position = engine.currentPosition
@@ -103,16 +110,18 @@ class SubtitleVideoPixelsTest {
                     val cue = (position / 1000).toInt()
                     if (cue in 2..7 && position % 1000 in 250..750 && cue !in seen) {
                         assertTrue("Missing translated cue $cue at $position", engine.getCurrentSubtitleText().contains("한국어 대사 Line $cue"))
+                        val started = android.os.SystemClock.elapsedRealtime()
                         waitPixels(true,"translated-playing-$cue")
+                        captureTimings += "cue=$cue position=$position->${engine.currentPosition} captureMs=${android.os.SystemClock.elapsedRealtime() - started}"
                         seen += cue
                     }
                     delay(50)
                 }
             }
-            assertEquals((2..7).toSet(), seen)
             ins.runOnMainSync { engine.pause(); engine.seekTo(1100) }
             withTimeout(5000) { while (!engine.getCurrentSubtitleText().contains("한국어 대사 Line 1")) delay(50) }
             waitPixels(true,"translated-rewind")
+            assertEquals("Playback capture timings: $captureTimings", (2..7).toSet(), seen)
         } finally {
             // Encoding/writing PNGs during 2x playback can skip the next cue's
             // sampling window. Retain the actual frames and persist after pause.
