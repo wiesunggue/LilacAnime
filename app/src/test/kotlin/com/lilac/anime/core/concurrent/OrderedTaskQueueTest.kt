@@ -60,4 +60,38 @@ class OrderedTaskQueueTest {
         release.complete(Unit);second.await();assertEquals(listOf(1,2),events)
         queue.close()
     }
+    @Test fun cancellingOwnerCompletesPendingCommandsAndRejectsNewCommands() = runTest {
+        val owner = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val queue = OrderedTaskQueue(owner)
+        val active = queue.submit { awaitCancellation() }
+        val pending = queue.submit { error("Must not run after cancellation") }
+        runCurrent()
+        owner.cancel(); runCurrent()
+        assertTrue(active.isCancelled)
+        assertTrue("Queued commands must not leave their callers waiting forever", pending.isCancelled)
+        assertTrue(queue.submit { error("Queue owner stopped") }.isCancelled)
+    }
+
+    @Test fun ownerCancelledBeforeWorkerStartsDoesNotLeavePendingCommandsHanging() = runTest {
+        val owner = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val queue = OrderedTaskQueue(owner)
+        val pending = queue.submit { error("Must not run") }
+        owner.cancel(); runCurrent()
+        assertTrue(pending.isCancelled)
+    }
+
+    @Test fun gracefulCloseStillDrainsAcceptedCommandsInOrder() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val events = mutableListOf<Int>()
+        val queue = OrderedTaskQueue(backgroundScope)
+        val first = queue.submit { release.await(); events += 1 }
+        val second = queue.submit { events += 2 }
+        queue.close(); runCurrent()
+        assertFalse(second.isCompleted)
+        release.complete(Unit)
+        first.await(); second.await()
+        assertEquals(listOf(1, 2), events)
+        assertTrue(queue.submit { error("Closed queue") }.isCancelled)
+    }
+
 }

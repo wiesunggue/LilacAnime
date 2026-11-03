@@ -237,4 +237,38 @@ Dialogue: 1,0:00:02.50,0:00:04.00,Default,,0,0,0,,World
         translator.clear()
     }
 
+    @Test fun validUtf8JapaneseIsNotReinterpretedAsALongerLegacyEncoding() = runTest {
+        val japanese = "あ".repeat(60)
+        val received = mutableListOf<String>()
+        val provider = Provider { lines -> received += lines; lines.map { "번역" } }
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider })
+        translator.playbackTick(file("1\n00:00:00,000 --> 00:00:02,000\n$japanese").path, 100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        assertEquals(listOf(japanese), received)
+        translator.clear()
+    }
+
+    @Test fun vttDialogueStartingWithNoteIsStillDisplayedAndTranslated() = runTest {
+        val received = mutableListOf<String>()
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), {
+            Provider { lines -> received += lines; lines.map { "번역" } }
+        })
+        val source = file("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nNOTE: Listen carefully", "vtt")
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        assertEquals(listOf("NOTE: Listen carefully"), received)
+        translator.clear()
+    }
+
+    @Test fun vttCommentTimingsNeverBecomeVisibleSubtitleEvents() = runTest {
+        val source = file("WEBVTT\n\nNOTE example timestamps in metadata\n00:00:00.000 --> 00:00:01.000\nDO NOT DISPLAY\n\n00:00:02.000 --> 00:00:03.000\nActual dialogue", "vtt")
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider() })
+        translator.playbackTick(source.path, 2100, backgroundScope, "gemini")
+        advanceTimeBy(200); runCurrent()
+        val snapshot = translator.nativeTrackSnapshot()!!
+        assertFalse(snapshot.contains("DO NOT DISPLAY"))
+        assertEquals(1, snapshot.lines().count { it.startsWith("Dialogue:") })
+        translator.clear()
+    }
+
 }

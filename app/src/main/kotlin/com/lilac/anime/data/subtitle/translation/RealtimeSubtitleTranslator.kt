@@ -668,6 +668,16 @@ class RealtimeSubtitleTranslator(
         val timing = Regex("^\\s*([^\\s]+)\\s*-->\\s*([^\\s]+)(?:\\s+.*)?$")
 
         while (i < lines.size) {
+            // WebVTT comments/style/region blocks are metadata only outside a
+            // cue. Their contents can include example timestamps. Conversely,
+            // NOTE inside a timed cue is ordinary dialogue and must survive.
+            val header = lines[i].trim()
+            if (kind == "vtt" && (header == "NOTE" || header.startsWith("NOTE ") ||
+                    header.startsWith("NOTE\t") || header == "STYLE" || header == "REGION")) {
+                i++
+                while (i < lines.size && lines[i].isNotBlank()) i++
+                continue
+            }
             val match = timing.find(lines[i])
             if (match == null) {
                 i++
@@ -685,7 +695,7 @@ class RealtimeSubtitleTranslator(
                 while (j < lines.size && !timing.matches(lines[j])) {
                     val line = lines[j]
                     if (line.isBlank()) break
-                    if (!(kind == "vtt" && line.trim().startsWith("NOTE", true))) add(line)
+                    add(line)
                     j++
                 }
             }.joinToString("\\N").trim()
@@ -808,6 +818,19 @@ class RealtimeSubtitleTranslator(
     private fun readSubtitleText(file: File): String? {
         val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
         if (bytes.isEmpty()) return null
+
+        // A valid UTF-8 string can also decode as longer Shift_JIS text with no
+        // replacement characters. Length is not evidence for that encoding.
+        // NULs exclude BOM-less UTF-16 timelines from this fast path.
+        if (bytes.none { it == 0.toByte() }) {
+            val utf8 = runCatching {
+                Charsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
+            }.getOrNull()
+            if (utf8 != null) return utf8
+        }
 
         val candidates = mutableListOf<Charset>()
         when {
