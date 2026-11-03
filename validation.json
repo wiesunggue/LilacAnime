@@ -1,0 +1,41 @@
+{
+  "versionCode": 42,
+  "versionName": "0.4.1-alpha-13-subtitle-check",
+  "package": "com.lilac.anime.subtitlecheck",
+  "certificate_sha256": "9f1aa4a4b4557a2c5c8bd5e7aa79c15f36021a7d09b4203e42d098f591140927",
+  "apk_sha256": "06d181de9e604b255785715b2b4cb2e5bca54a7292de86d47b31e9691a1fb41c",
+  "bytes": 95953324,
+  "jvm": {
+    "tests": 109,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "android": {
+    "tests": 2,
+    "failures": 0,
+    "runner": "adb am instrument; real PlayerScreen/TextureView/libmpv; deterministic provider",
+    "checks": [
+      "ASS original green size100->180; translated ASS green at 180",
+      "invalid replacement retains current captions",
+      "actual touch size slider",
+      "pending original stays visible",
+      "SRT colour preserved",
+      "original/translated buttons actually selected",
+      "five later cues at normal speed",
+      "rewind retains translation",
+      "paused translated frame differs from original pixels",
+      "original/translated toggle returns identical translated pixels",
+      "all five later cues have changed green pixels and matching native text",
+      "rewind rendered pixels exactly match the initial translated frame"
+    ],
+    "log": "v13-buffered-render-device.log: OK (2 tests)"
+  },
+  "unverified": [
+    "paid provider APIs and inference",
+    "user device and streams",
+    "old 2x 500ms/cue capture test on software emulator"
+  ],
+  "source_commit": "650c8409611627db4568248998d6dfc7241953c8",
+  "download_url": "https://github.com/wiesunggue/LilacAnime/raw/refs/heads/downloads/subtitle-check-v13/LilacAnime-v13-arm64.apk"
+}
