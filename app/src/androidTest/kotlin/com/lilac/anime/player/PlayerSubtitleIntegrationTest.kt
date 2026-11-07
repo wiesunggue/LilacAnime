@@ -139,9 +139,18 @@ class PlayerSubtitleIntegrationTest {
     }
 
     @Test fun realScreenRetainsColourResizesDuringTranslationAndKeepsLaterCues() = runBlocking<Unit> {
+        runRealScreenScenario(false)
+    }
+    @Test fun delayedNextCueBuffersThenResumesInKoreanWithoutSourceFallback() = runBlocking<Unit> {
+        runRealScreenScenario(true)
+    }
+    private suspend fun runRealScreenScenario(delayNextCue: Boolean) {
         val ins = InstrumentationRegistry.getInstrumentation()
         val context = ins.targetContext
         AppContextHolder.init(context)
+        context.getSharedPreferences("lilac_offline_store", 0).edit()
+            .putBoolean("pref_ai_prefetch_enabled", true)
+            .putInt("pref_ai_prefetch_ahead", if (delayNextCue) 0 else 10).commit()
         val animeId = "subtitle-ui-colour-size"
         val episode = Episode("1", 1, "자막 회귀 검사")
         val video = MpvOfflineStore.videoFile(context, animeId, episode.id).apply { parentFile!!.mkdirs() }
@@ -155,17 +164,20 @@ class PlayerSubtitleIntegrationTest {
         SubtitleStore.save(context, animeId, "1", 1, "linkkf", source.path)
         SubtitleSelectionStore.clear(context, animeId)
         val gate = CompletableDeferred<Unit>()
+        val nextGate = CompletableDeferred<Unit>()
         val provider = object : TranslationProvider {
             override val id = "gemini"
             override val displayName = "deterministic delayed model"
             override suspend fun translateBatch(lines: List<String>): List<String> {
                 gate.await(); delay(300)
+                if (delayNextCue && lines.any { it.substringAfterLast(' ') == "1" }) nextGate.await()
                 return lines.map { "한국어 대사 ${it.substringAfterLast(' ')}" }
             }
         }
         val vm = ViewModelProvider(compose.activity)[AnimeViewModel::class.java]
         compose.runOnUiThread {
-            vm.updatePlayerSettings(context, vm.playerSettings.copy(translationProvider = "gemini", subtitleSourcePreference = "linkkf", subtitleSize = 100f, vttBold = true, autoPlay = false))
+            vm.updatePlayerSettings(context, vm.playerSettings.copy(translationProvider = "gemini", subtitleSourcePreference = "linkkf", subtitleSize = 100f, vttBold = true, autoPlay = false,
+                aiPrefetchEnabled = true, aiPrefetchAhead = if (delayNextCue) 0 else 10))
         }
         val anime = Anime(id = animeId, title = "자막 회귀 검사", source = "linkkf", episodes = listOf(episode))
         try {
@@ -204,6 +216,17 @@ class PlayerSubtitleIntegrationTest {
             val seen = mutableSetOf<Int>()
             var previousCue = large
             compose.runOnUiThread { engine.seekTo(1000); engine.setSpeed(1f); engine.play() }
+            if (delayNextCue) {
+                compose.waitUntil(60000) { !engine.isPlaying && engine.currentPosition in 1500L..2800L }
+                compose.onNodeWithText("다음 자막 번역 중 · 준비되면 이어서 재생합니다").assertIsDisplayed()
+                val stoppedAt = engine.currentPosition
+                waitFrame("screen-slow-next-wait") { it.samePixels(large) }
+                repeat(10) { compose.mainClock.advanceTimeBy(100); delay(100) }
+                assertTrue("Video must wait before the untranslated next cue", kotlin.math.abs(engine.currentPosition - stoppedAt) < 200)
+                assertFalse("Generated AI track must never switch to original dialogue", File(engine.currentSubtitleFilePath!!).readText().contains("Original"))
+                nextGate.complete(Unit)
+                compose.waitUntil(60000) { engine.isPlaying && File(engine.currentSubtitleFilePath!!).readText().contains("한국어 대사 1") }
+            }
             val deadline = android.os.SystemClock.elapsedRealtime() + 40000
             while (engine.currentPosition < 18100 && android.os.SystemClock.elapsedRealtime() < deadline) {
                 compose.mainClock.advanceTimeBy(100)
@@ -226,6 +249,7 @@ class PlayerSubtitleIntegrationTest {
             assertEquals("Normal-speed real PlayerScreen must retain every later translation", (1..5).toSet(), seen)
         } finally {
             gate.complete(Unit)
+            nextGate.complete(Unit)
             compose.runOnUiThread { compose.activity.setContentView(android.widget.FrameLayout(compose.activity)) }
             flushEvidence()
             source.delete(); video.delete()

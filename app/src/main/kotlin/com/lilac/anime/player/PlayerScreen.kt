@@ -301,6 +301,7 @@ fun PlayerScreen(
         mutableStateOf(RealtimeSubtitleTranslator.PlaybackProgress(0, 0, null))
     }
     var translationTrackError by remember(currentEpisode.id, subtitleTranslationMode, localSubtitle) { mutableStateOf(false) }
+    var translationWaiting by remember(currentEpisode.id, subtitleTranslationMode, localSubtitle) { mutableStateOf(false) }
     var translationSourcePath by remember(currentEpisode.id) { mutableStateOf<String?>(null) }
     var surfaceAttached by remember { mutableStateOf(false) }
     var vttOutlineWidth by rememberSaveable { mutableFloatStateOf(vm.playerSettings.vttOutlineWidth) }
@@ -566,6 +567,15 @@ fun PlayerScreen(
         val sessionEngine = engine
         val sessionEpisode = currentEpisode.id
         var track: TranslatedSubtitleTrack? = null
+        val buffer = SubtitleTranslationBuffer(object : SubtitleTranslationBuffer.Output {
+            override val generation get() = sessionEngine.activeLoadGeneration
+            override val actionRevision get() = sessionEngine.playbackActionRevision
+            override val playing get() = sessionEngine.isPlaying
+            override fun pause() = sessionEngine.pause()
+            override fun playIfUnchanged(revision: Long): Boolean =
+                engine === sessionEngine && currentEpisode.id == sessionEpisode &&
+                    sessionEngine.playbackState == MpvPlayerEngine.STATE_READY && sessionEngine.playIfUnchanged(revision)
+        })
         val output = object : TranslatedSubtitleTrack.Output {
             override val selectedPath get() = if (engine === sessionEngine) sessionEngine.currentSubtitleFilePath else null
             override val ready get() = engine === sessionEngine && currentEpisode.id == sessionEpisode &&
@@ -588,13 +598,22 @@ fun PlayerScreen(
                         val subtitleTime = engine.currentPosition - subtitleSyncMs
                         realtimeTranslator.ensurePrepared(original, subtitleTime, this, vm.playerSettings.translationProvider)
                         realtimeTranslator.updatePlaybackPosition(subtitleTime)
+                        val windowReady = realtimeTranslator.playbackWindowReady(subtitleTime)
+                        if (subtitleEnabled && !windowReady) {
+                            translationWaiting = true
+                            buffer.update(true)
+                        }
                         track!!.update(realtimeTranslator.nativePlaybackSnapshot())
+                        translationWaiting = subtitleEnabled && (!windowReady || track!!.lastAttachFailed)
+                        buffer.update(translationWaiting)
                     }
                     translationProgress = realtimeTranslator.playbackProgress()
                     translationTrackError = track?.lastAttachFailed == true
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (failure: Exception) {
                     translationTrackError = true
+                    translationWaiting = subtitleEnabled
+                    buffer.update(translationWaiting)
                     Log.e("SubtitlePlayback", "TRANSLATED_TRACK_UPDATE_FAILED_KEEP_SOURCE", failure)
                 }
                 engine.setSubtitleVisible(subtitleEnabled)
@@ -603,6 +622,7 @@ fun PlayerScreen(
         } finally {
             withContext(NonCancellable) {
                 track?.close()
+                buffer.close()
                 engine.setSubtitleVisible(subtitleEnabled)
                 realtimeTranslator.clear()
             }
@@ -1992,11 +2012,12 @@ fun PlayerScreen(
         )
         }
 
-        if (subtitleTranslationMode == "korean" && (controlsVisible || translationProgress.error != null || translationTrackError)) {
+        if (subtitleTranslationMode == "korean" && (controlsVisible || translationWaiting || translationProgress.error != null || translationTrackError)) {
             val message = when {
-                translationTrackError || translationProgress.error != null -> "번역 실패 · 원문 표시 중 (AI 설정 확인)"
-                translationProgress.completed == 0 -> "번역 준비 중 · 원문 표시 중"
-                else -> "번역 ${translationProgress.completed}/${translationProgress.total} · 미완료 구간은 원문 표시"
+                translationTrackError || translationProgress.error != null -> "번역 실패 · 재생 대기 중 (원문 모드로 전환하거나 AI 설정 확인)"
+                translationWaiting -> "다음 자막 번역 중 · 준비되면 이어서 재생합니다"
+                translationProgress.completed == 0 -> "번역 준비 중"
+                else -> "번역 ${translationProgress.completed}/${translationProgress.total}"
             }
             Text(message, color = Color.White, fontSize = 11.sp,
                 modifier = Modifier.align(Alignment.TopStart).padding(top = 64.dp, start = 16.dp)

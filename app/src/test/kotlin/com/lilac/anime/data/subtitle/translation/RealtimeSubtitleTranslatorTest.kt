@@ -34,6 +34,45 @@ class RealtimeSubtitleTranslatorTest {
         fun time(value: Int) = "%02d:%02d:%02d,000".format(value / 3600, value / 60 % 60, value % 60)
         "${i+1}\n${time(seconds)} --> ${time(seconds+1)}\nLine $i"
     }
+    @Test fun aiPlaybackCannotReturnToSourceWhenTheNextBatchIsDelayed() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val provider = Provider { lines ->
+            if (lines.any { it == "Line 1" }) gate.await()
+            lines.map { "한국어 ${it.substringAfterLast(' ')}" }
+        }
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider })
+        val source = file(srt(3))
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini"); runCurrent()
+        val first = translator.nativePlaybackSnapshot()!!
+        assertTrue(first.content.contains("한국어 0"))
+        assertFalse("AI track must not contain the next untranslated source dialogue", first.content.contains("Line 1"))
+        translator.playbackTick(source.path, 2100, backgroundScope, "gemini"); advanceTimeBy(200); runCurrent()
+        assertNull(translator.nativePlaybackSnapshot())
+        gate.complete(Unit); runCurrent()
+        val next = translator.nativePlaybackSnapshot()!!
+        assertTrue(next.content.contains("한국어 0"))
+        assertTrue(next.content.contains("한국어 1"))
+        translator.clear()
+    }
+    @Test fun reserveRequestsTheNextCueBeforeItStartsEvenWithLookAheadOff() = runTest {
+        context.getSharedPreferences("lilac_offline_store", 0).edit().putBoolean("pref_ai_prefetch_enabled", false).commit()
+        val gate = CompletableDeferred<Unit>()
+        val source = file("1\n00:00:00,000 --> 00:00:03,000\nFirst\n\n2\n00:00:03,000 --> 00:00:06,000\nNext")
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), {
+            Provider { lines -> if ("Next" in lines) gate.await(); lines.map { "한국어" } }
+        })
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini"); runCurrent()
+        assertTrue(translator.playbackWindowReady(100))
+        assertEquals(1, translator.playbackProgress().completed)
+        translator.updatePlaybackPosition(2500)
+        assertFalse(translator.playbackWindowReady(2500))
+        advanceTimeBy(200); runCurrent()
+        assertFalse(translator.playbackWindowReady(2500))
+        gate.complete(Unit); runCurrent()
+        assertTrue(translator.playbackWindowReady(2500))
+        assertEquals(2, translator.playbackProgress().completed)
+        translator.clear()
+    }
     @Test fun overlappingLongSignDoesNotBlockCurrentDialogue() = runTest {
         for (ahead in listOf(0, 10)) {
             context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", ahead).commit()
@@ -283,7 +322,7 @@ Dialogue: 1,0:00:02.50,0:00:04.00,Default,,0,0,0,,World
         gate.complete(Unit); runCurrent()
         val snapshot = translator.nativePlaybackSnapshot()!!
         assertEquals("srt", snapshot.extension)
-        assertEquals(sourceText.replace("Hello", "안녕"), snapshot.content)
+        assertEquals(sourceText.replace("Hello", "안녕").replace("Later", ""), snapshot.content)
         assertNull(translator.nativePlaybackSnapshot())
         translator.clear()
     }
@@ -294,7 +333,7 @@ Dialogue: 1,0:00:02.50,0:00:04.00,Default,,0,0,0,,World
         translator.playbackTick(file(sourceText, "vtt").path, 100, backgroundScope, "gemini"); runCurrent()
         val snapshot = translator.nativePlaybackSnapshot()!!
         assertEquals("vtt", snapshot.extension)
-        assertEquals(sourceText.replace("Hello", "안녕"), snapshot.content)
+        assertEquals(sourceText.replace("Hello", "안녕").replace("Untranslated", ""), snapshot.content)
         translator.clear()
     }
 
