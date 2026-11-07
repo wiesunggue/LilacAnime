@@ -1,0 +1,44 @@
+{
+  "versionCode": 43,
+  "versionName": "0.4.1-alpha-14-subtitle-check",
+  "package": "com.lilac.anime.subtitlecheck",
+  "certificate_sha256": "9f1aa4a4b4557a2c5c8bd5e7aa79c15f36021a7d09b4203e42d098f591140927",
+  "apk_sha256": "d931ae449c09f0d8216b2073c20b774daaa520ccd38b25a83f716e6c9ab0ce9d",
+  "bytes": 95969708,
+  "abi": "arm64-v8a",
+  "jvm": {
+    "tests": 117,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "android": {
+    "tests": 3,
+    "state": "passed",
+    "failures": 0,
+    "runner": "real PlayerScreen/TextureView/libmpv; delayed deterministic provider",
+    "checks": [
+      "ASS original green size100->180; translated ASS green at 180",
+      "touch size slider and original/AI buttons",
+      "delayed next cue pauses video before its start",
+      "waiting position and green frame stay unchanged",
+      "AI file contains no original dialogue",
+      "response attaches Korean before automatically resuming",
+      "all five later Korean cue frames",
+      "rewind pixels equal initial translated frame",
+      "paused translated frame differs from original pixels",
+      "original/translated toggle returns identical translated pixels",
+      "all five later cues have changed green pixels and matching native text",
+      "rewind rendered pixels exactly match the initial translated frame"
+    ],
+    "log": "v14-device-final.log: OK (3 tests)",
+    "seconds": 207.912
+  },
+  "unverified": [
+    "paid APIs and user device/streams",
+    "old 2x/500ms capture test",
+    "remote Actions result blocked by CONNECT 403"
+  ],
+  "source_commit": "cef614979dc5a206ff31f8b25a7008f29e593d92",
+  "download_url": "https://github.com/wiesunggue/LilacAnime/raw/refs/heads/downloads/subtitle-check-v14/LilacAnime-v14-arm64.apk"
+}
