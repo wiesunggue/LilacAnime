@@ -886,7 +886,14 @@ fun PlayerScreen(
     // Playback is always landscape while this screen owns the player.
     // Hide the Android status/navigation bars (including the gesture handle) only
     // while the mobile player is on screen. They are restored when leaving it.
-    DisposableEffect(activity, isTv, MainActivity.isInPictureInPicture) {
+    // Window mode changes resize the existing player; they do not relinquish
+    // ownership of its native engine. Keying disposal on PiP destroys the live
+    // engine on expansion while AndroidView and translation still reference it.
+    LaunchedEffect(activity, MainActivity.isInPictureInPicture) {
+        activity?.requestedOrientation = if (MainActivity.isInPictureInPicture)
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+    DisposableEffect(activity, isTv) {
         val host = activity
         val hadKeepScreenOn =
             host?.window?.attributes?.flags?.and(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0
@@ -908,8 +915,8 @@ fun PlayerScreen(
 
         onDispose {
             if (!MainActivity.isInPictureInPicture) {
-                runCatching { engine.stop() }
-                runCatching { engine.detachSurface() }
+                // The manager checks engine identity and background-audio
+                // ownership before touching native playback.
                 runCatching { MpvPlaybackManager.releaseForegroundEngine(engine) }
                 MainActivity.isVideoPlaying = false
             }

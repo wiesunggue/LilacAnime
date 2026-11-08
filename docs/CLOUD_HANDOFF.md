@@ -1,6 +1,12 @@
 # LilacAnime 클라우드 작업 인계
 
-최신 확인일: 2026-11-07 UTC. **이 문서는 작업 상태의 스냅샷이다. 실행 중인 GitHub Actions의 최종 결과는 작업 재개 시 다시 확인한다.**
+최신 확인일: 2026-11-08 (한국 시간). **이 문서는 작업 상태의 스냅샷이다. GitHub Actions의 과거 결과를 로컬 검사 결과와 혼동하지 않는다.**
+
+## 최신 개선: v15 (versionCode 44)
+
+[BUGFIX_V15.md](BUGFIX_V15.md)에 홈→PiP→전체 화면 복귀 시 엔진이 해제되는 문제의 원인·재현·수정을 기록했다. 사용자 요청에 따라 Codex 클라우드 안에서 직접 Gradle로 빌드·서명하며, 소스와 다운로드 커밋에 `[skip ci]`를 사용해 GitHub 자동 빌드를 건너뛴다. GitHub는 다운로드 배포에 사용한다. 소스 브랜치는 계속 `fix/subtitle-verified-v11`이며 기존 패키지/키를 유지한다.
+
+JVM 117개와 Android 검사 5개의 최신 결과가 통과했다. 실제 PiP 검사는 홈→시스템 확대 복귀 3회를 확인한 단독 재실행이며, 나머지 4개는 같은 APK의 전체 실행 결과다. 검사 장치 보완 과정의 초기 실패는 위 문서에 구분했다. 실제 사용자 기기/다른 안드로이드 버전은 미검증이다. [v15 다운로드 브랜치](https://github.com/wiesunggue/LilacAnime/tree/downloads/subtitle-check-v15)에 APK·메타데이터·검사 캡처를 보관한다.
 
 ## 최신 개선: v14 (versionCode 43)
 

@@ -105,8 +105,8 @@ jobs:
                   testInstrumentationRunner = "com.lilac.anime.player.SubtitleTestRunner"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 43
-                  versionName = "0.4.1-alpha-14-subtitle-check"
+                  versionCode = 44
+                  versionName = "0.4.1-alpha-15-subtitle-check"
 
                   ndk {
                       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -210,6 +210,7 @@ jobs:
           mkdir -p app/src/androidTest/assets
           ffmpeg -f lavfi -i color=c=black:s=640x360:r=15:d=20 -c:v mpeg4 -q:v 8 -y app/src/androidTest/assets/black.mp4
           ffmpeg -f lavfi -i color=c=black:s=640x360:r=15:d=45 -f lavfi -i anullsrc=r=44100:cl=mono -c:v mpeg4 -q:v 8 -c:a aac -shortest -y app/src/androidTest/assets/player-black.mp4
+          ffmpeg -f lavfi -i color=c=black:s=640x360:r=15:d=180 -f lavfi -i anullsrc=r=44100:cl=mono -c:v mpeg4 -q:v 8 -c:a aac -shortest -y app/src/androidTest/assets/pip-black.mp4
 
       - name: Run JVM regression tests
         env:
