@@ -70,6 +70,20 @@ class RealtimeSubtitleTranslator(
     private var projectionStamp: Pair<Int, Long>? = null
     private var playbackStamp: Pair<Int, Long>? = null
     private var lastTranslationError: String? = null
+    private var retryRequired = false
+    private var retryRevision = 0L
+    private var translationEnabled = true
+
+    /** Retain completed cues; only failed work needs another paid request. */
+    suspend fun retryFailedTranslations() = lock.withLock {
+        retryRequired = false
+        lastTranslationError = null
+        retryRevision++
+    }
+
+    suspend fun setTranslationEnabled(enabled: Boolean) = lock.withLock {
+        translationEnabled = enabled
+    }
 
     data class PlaybackSnapshot(val content: String, val extension: String)
     data class PlaybackProgress(val completed: Int, val total: Int, val error: String?)
@@ -152,7 +166,9 @@ class RealtimeSubtitleTranslator(
             append(NATIVE_HEADER.trimEnd()); append('\n')
             for (cue in cues) {
                 val translated = cache[cueCacheKey(cue)]
-                val text = if (translated == null) SubtitleMarkup.plainText(cue.text) else restoreTags(cue.text, translated, cue.kind)
+                val text = if (translated == null) {
+                    if (keepPendingOriginal) SubtitleMarkup.plainText(cue.text) else ""
+                } else restoreTags(cue.text, translated, cue.kind)
                 append("Dialogue: "); append(buildAssEventData(content, cue, text)); append('\n')
             }
         }
@@ -211,6 +227,7 @@ class RealtimeSubtitleTranslator(
             translationLock = Mutex()
             cache.clear()
             lastTranslationError = null
+            retryRequired = false
             sourceContent = content
             sourceDialogueBodies = dialogueBodies
             sourcePath = file.absolutePath
@@ -234,7 +251,7 @@ class RealtimeSubtitleTranslator(
         )
 
         worker = scope.launch(dispatcher) {
-            prefetchLoop(localGeneration, positionMs.coerceAtLeast(0L))
+            prefetchLoop(localGeneration)
         }
     }
 
@@ -293,6 +310,7 @@ class RealtimeSubtitleTranslator(
             translationLock = Mutex()
             cache.clear()
             lastTranslationError = null
+            retryRequired = false
             cues = emptyList()
             sourceContent = null
             sourceDialogueBodies = emptyList()
@@ -325,13 +343,16 @@ class RealtimeSubtitleTranslator(
         sessionStarted = true
     }
 
-    private suspend fun prefetchLoop(localGeneration: Int, initialPositionMs: Long) {
-        var lastPositionMs = initialPositionMs
+    private suspend fun prefetchLoop(localGeneration: Int) {
         val failures = mutableMapOf<String, Int>()
+        var seenRetry = lock.withLock { retryRevision }
 
         while (true) {
             currentCoroutineContext().ensureActive()
             if (localGeneration != lock.withLock { generation }) return
+            val retry = lock.withLock { retryRevision }
+            if (retry != seenRetry) { failures.clear(); seenRetry = retry }
+            if (lock.withLock { retryRequired || !translationEnabled }) { delay(150L); continue }
             val snapshot = lock.withLock { cues }
             if (snapshot.isEmpty()) {
                 delay(250L)
@@ -355,8 +376,6 @@ class RealtimeSubtitleTranslator(
             // Re-evaluate all active cues on every tick. Long overlapping signs
             // must not anchor the future window, and every rewind must recover
             // uncached dialogue regardless of seek distance.
-            if (position < lastPositionMs) failures.clear()
-            lastPositionMs = position
             val active = ordered.filter { it.startMs <= position && it.endMs > position }
             val upcoming = ordered.filter { it.startMs > position }
                 .take(prefetchAhead + if (active.isEmpty()) 1 else 0)
@@ -394,7 +413,6 @@ class RealtimeSubtitleTranslator(
                         translateCloudCues(
                             selectedProvider = selectedProvider,
                             batch = batch,
-                            failures = failures,
                             localGeneration = localGeneration,
                         )
                     }
@@ -409,7 +427,9 @@ class RealtimeSubtitleTranslator(
                     "PREFETCH_BATCH_FAILED provider=$activeProviderId cues=${batch.joinToString { it.index.toString() }}",
                     error,
                 )
-                var exhausted = false
+                // Cloud requests already have a bounded retry budget. Do not
+                // repeat that budget for every cue or restart it after a seek.
+                var exhausted = selectedProvider !is LocalTranslator
                 batch.forEach { cue ->
                     val key = cueCacheKey(cue)
                     val attempt = (failures[key] ?: 0) + 1
@@ -420,6 +440,7 @@ class RealtimeSubtitleTranslator(
                     }
                 }
                 if (exhausted) {
+                    lock.withLock { if (localGeneration == generation) retryRequired = true }
                     AiRuntimeDiagnostics.record(context, "실시간 자막 번역 ($activeProviderId)", error)
                 }
                 delay(if (activeProviderId == "local") 500L else 2000L)
@@ -458,7 +479,6 @@ class RealtimeSubtitleTranslator(
     private suspend fun translateCloudCues(
         selectedProvider: TranslationProvider,
         batch: List<Cue>,
-        failures: MutableMap<String, Int>,
         localGeneration: Int,
     ) {
         val sources = batch.map { modelText(it.text, it.kind) }
@@ -482,6 +502,9 @@ class RealtimeSubtitleTranslator(
             Log.i(TAG, "PREFETCH_TRANSLATE_BATCH_OK provider=$activeProviderId count=${results.size}")
         } catch (batchError: Throwable) {
             if (batchError is CancellationException) throw batchError
+            // Smaller requests can repair malformed model output, never an
+            // invalid key, exhausted quota or disconnected network.
+            if (batch.size <= 1 || batchError !is TranslationResponseException) throw batchError
             Log.w(
                 TAG,
                 "PREFETCH_BATCH_FALLBACK provider=$activeProviderId count=${batch.size} reason=${batchError.message}",
@@ -494,36 +517,16 @@ class RealtimeSubtitleTranslator(
                 if (localGeneration != lock.withLock { generation }) {
                     throw CancellationException("subtitle session changed")
                 }
-                try {
-                    val single = translateCloudBatchWithFallback(
-                        selectedProvider,
-                        listOf(modelText(cue.text, cue.kind)),
-                        localGeneration,
-                    ).firstOrNull()?.trim()?.takeIf { it.isNotBlank() }
-                        ?: error("단일 자막 번역 결과가 비어 있습니다.")
-                    lock.withLock {
-                        if (localGeneration == generation) storeTranslation(cue, single)
-                    }
-                    Log.i(TAG, "PREFETCH_SINGLE_FALLBACK_OK provider=$activeProviderId cue=${cue.index}")
-                } catch (singleError: Throwable) {
-                    if (singleError is CancellationException) throw singleError
-                    lock.withLock { if (localGeneration == generation) lastTranslationError = singleError.message ?: "Translation failed" }
-                    val key = cueCacheKey(cue)
-                    val attempt = (failures[key] ?: 0) + 1
-                    failures[key] = attempt
-                    Log.e(
-                        TAG,
-                        "PREFETCH_SINGLE_FALLBACK_FAILED provider=$activeProviderId cue=${cue.index} attempt=$attempt",
-                        singleError,
-                    )
-                    if (attempt >= 3) {
-                        AiRuntimeDiagnostics.record(
-                            context,
-                            "실시간 자막 단일 번역 ($activeProviderId, cue=${cue.index})",
-                            singleError,
-                        )
-                    }
+                if (lock.withLock { !translationEnabled }) return
+                val single = translateCloudBatchWithFallback(
+                    selectedProvider,
+                    listOf(modelText(cue.text, cue.kind)),
+                    localGeneration,
+                ).single().trim()
+                lock.withLock {
+                    if (localGeneration == generation) storeTranslation(cue, single)
                 }
+                Log.i(TAG, "PREFETCH_SINGLE_FALLBACK_OK provider=$activeProviderId cue=${cue.index}")
             }
         }
     }
@@ -540,6 +543,7 @@ class RealtimeSubtitleTranslator(
             ).distinct()
         val failures = mutableListOf<String>()
         var lastError: Throwable? = null
+        var onlyMalformedResponses = true
 
         for (providerId in providerIds) {
             if (providerId != primaryId && !hasApiKey(providerId)) continue
@@ -551,6 +555,10 @@ class RealtimeSubtitleTranslator(
 
             for (attempt in 0..2) {
                 try {
+                    while (lock.withLock { !translationEnabled }) {
+                        delay(150L)
+                        if (localGeneration != lock.withLock { generation }) throw CancellationException("Subtitle changed")
+                    }
                     Log.i(
                         TAG,
                         "CLOUD_PROVIDER_ATTEMPT provider=$providerId attempt=${attempt + 1}/3 lines=${lines.size}",
@@ -560,7 +568,7 @@ class RealtimeSubtitleTranslator(
                     currentCoroutineContext().ensureActive()
                     if (localGeneration != lock.withLock { generation }) throw CancellationException("Subtitle changed")
                     if (results.size != lines.size || results.any { it.isBlank() }) {
-                        error("$providerId 응답 줄 수/내용 불일치 expected=${lines.size} actual=${results.size}")
+                        throw TranslationResponseException("$providerId 응답 줄 수/내용 불일치 expected=${lines.size} actual=${results.size}")
                     }
                     if (providerId != primaryId) {
                         Log.w(
@@ -577,6 +585,7 @@ class RealtimeSubtitleTranslator(
                     return results
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
+                    if (error !is TranslationResponseException) onlyMalformedResponses = false
                     lastError = error
                     failures += "$providerId: ${error.message ?: error.javaClass.simpleName}"
                     val message = error.message.orEmpty()
@@ -604,6 +613,7 @@ class RealtimeSubtitleTranslator(
         }
 
         val summary = failures.distinct().joinToString(" | ").take(2500)
+        if (onlyMalformedResponses && failures.isNotEmpty()) throw TranslationResponseException(summary)
         throw IllegalStateException(
             if (summary.isBlank()) {
                 "사용 가능한 클라우드 번역 API 키가 없습니다. AI 설정에서 API 키를 저장하세요."

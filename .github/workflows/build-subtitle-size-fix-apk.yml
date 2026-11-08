@@ -105,8 +105,8 @@ jobs:
                   testInstrumentationRunner = "com.lilac.anime.player.SubtitleTestRunner"
                   minSdk = 26
                   targetSdk = 36
-                  versionCode = 44
-                  versionName = "0.4.1-alpha-15-subtitle-check"
+                  versionCode = 45
+                  versionName = "0.4.1-alpha-16-subtitle-check"
 
                   ndk {
                       abiFilters += listOf("arm64-v8a", "x86_64")

@@ -140,6 +140,8 @@ class PipPlaybackIntegrationTest {
             val engine = requireNotNull(MpvPlaybackManager.currentEngineOrNull())
             compose.waitUntil(60000) { engine.playbackState == MpvPlayerEngine.STATE_READY && engine.getCurrentSubtitleText().contains("한국어") }
             ins.runOnMainSync { engine.play(); MainActivity.isVideoPlaying = true }
+            val startedAt = engine.currentPosition
+            compose.waitUntil(15000) { engine.isPlaying && engine.currentPosition > startedAt + 200 }
             val generation = engine.activeLoadGeneration
             var fullWidth = 0
             ins.runOnMainSync { fullWidth = activity.window.decorView.width }
@@ -161,7 +163,7 @@ class PipPlaybackIntegrationTest {
                 compose.waitForIdle()
                 assertSame("PiP restore $cycle released the live native player", engine, MpvPlaybackManager.currentEngineOrNull())
                 assertEquals("PiP must not reload the episode", generation, engine.activeLoadGeneration)
-                assertTrue("PiP must preserve playing state", engine.isPlaying)
+                assertTrue("PiP must preserve playing state: cycle=$cycle position=${engine.currentPosition} state=${engine.playbackState} action=${engine.playbackActionRevision} track=${engine.currentSubtitleFilePath}", engine.isPlaying)
                 assertTrue("PiP must not reset playback", engine.currentPosition >= before)
                 compose.waitUntil(15000) {
                     var green = 0

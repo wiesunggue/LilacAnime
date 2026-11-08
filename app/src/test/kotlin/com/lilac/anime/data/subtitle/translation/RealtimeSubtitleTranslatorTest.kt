@@ -34,6 +34,44 @@ class RealtimeSubtitleTranslatorTest {
         fun time(value: Int) = "%02d:%02d:%02d,000".format(value / 3600, value / 60 % 60, value % 60)
         "${i+1}\n${time(seconds)} --> ${time(seconds+1)}\nLine $i"
     }
+    @Test fun authenticationFailureDoesNotFanOutIntoPerCueRequestsOrRetryOnSeek() = runTest {
+        context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", 40).commit()
+        val provider = Provider { error("HTTP 401 invalid key") }
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider }, { false })
+        val source = file(srt(50))
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini")
+        advanceTimeBy(60000); runCurrent()
+        translator.updatePlaybackPosition(0)
+        advanceTimeBy(60000); runCurrent()
+        assertEquals("Invalid credentials must stop requests until an explicit retry", 1, provider.calls)
+        assertNotNull(translator.playbackProgress().error)
+        translator.clear()
+    }
+    @Test fun networkFailureHasOneBoundedRetryBudgetForTheWholeWindow() = runTest {
+        context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", 10).commit()
+        val provider = Provider { throw java.io.IOException("offline") }
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider }, { false })
+        translator.playbackTick(file(srt(12)).path, 100, backgroundScope, "gemini")
+        advanceTimeBy(120000); runCurrent()
+        assertEquals("Network retries must not multiply by cue count", 3, provider.calls)
+        translator.clear()
+    }
+    @Test fun convertedSubtitleFormatsNeverPublishPendingOriginalDialogueInAiMode() = runTest {
+        val sources = mapOf(
+            "sbv" to "0:00:00.000,0:00:01.000\nFirst\n\n0:00:02.000,0:00:03.000\nPending",
+            "mpl2" to "[0][10]First\n[20][30]Pending",
+            "ttml" to "<tt><body><p begin=\"0s\" end=\"1s\">First</p><p begin=\"2s\" end=\"3s\">Pending</p></body></tt>",
+        )
+        for ((ext, content) in sources) {
+            val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { Provider { it.map { "한국어" } } })
+            translator.playbackTick(file(content, ext).path, 100, backgroundScope, "gemini"); runCurrent()
+            val snapshot = translator.nativePlaybackSnapshot()!!
+            assertTrue(snapshot.content.contains("한국어"))
+            assertFalse("Pending $ext dialogue must wait for translation", snapshot.content.contains("Pending"))
+            assertEquals(2, snapshot.content.lines().count { it.startsWith("Dialogue:") })
+            translator.clear()
+        }
+    }
     @Test fun aiPlaybackCannotReturnToSourceWhenTheNextBatchIsDelayed() = runTest {
         val gate = CompletableDeferred<Unit>()
         val provider = Provider { lines ->
@@ -53,6 +91,60 @@ class RealtimeSubtitleTranslatorTest {
         assertTrue(next.content.contains("한국어 0"))
         assertTrue(next.content.contains("한국어 1"))
         translator.clear()
+    }
+    @Test fun explicitRetryKeepsCompletedCuesAndOnlyRequestsMissingDialogue() = runTest {
+        var broken = true
+        val requests = mutableListOf<List<String>>()
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), {
+            Provider { lines ->
+                requests += lines
+                if (broken && "Line 1" in lines) error("HTTP 401")
+                lines.map { "한국어 $it" }
+            }
+        }, { false })
+        val source = file(srt(3))
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini"); runCurrent()
+        translator.playbackTick(source.path, 2100, backgroundScope, "gemini"); advanceTimeBy(5000); runCurrent()
+        assertEquals(1, translator.playbackProgress().completed)
+        assertNotNull(translator.playbackProgress().error)
+        broken = false
+        translator.retryFailedTranslations()
+        advanceTimeBy(3000); runCurrent()
+        assertEquals(2, translator.playbackProgress().completed)
+        assertNull(translator.playbackProgress().error)
+        assertEquals(listOf(listOf("Line 0"), listOf("Line 1"), listOf("Line 1")), requests)
+        translator.clear()
+    }
+    @Test fun hidingSubtitlesStopsNewRequestsAndRetainsCompletedWork() = runTest {
+        val provider = Provider()
+        val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider }, { false })
+        val source = file(srt(3))
+        translator.playbackTick(source.path, 100, backgroundScope, "gemini"); runCurrent()
+        translator.setTranslationEnabled(false)
+        translator.playbackTick(source.path, 2100, backgroundScope, "gemini")
+        advanceTimeBy(60000); runCurrent()
+        assertEquals(1, provider.calls)
+        assertEquals(1, translator.playbackProgress().completed)
+        translator.setTranslationEnabled(true)
+        advanceTimeBy(300); runCurrent()
+        assertEquals(2, provider.calls)
+        assertEquals(2, translator.playbackProgress().completed)
+        translator.clear()
+    }
+    @Test fun malformedBatchCanSplitButQuotaFailureCannot() = runTest {
+        context.getSharedPreferences("lilac_offline_store", 0).edit().putInt("pref_ai_prefetch_ahead", 2).commit()
+        for (quota in listOf(false, true)) {
+            val provider = Provider { lines ->
+                if (quota) error("HTTP 429 quota exhausted")
+                if (lines.size > 1) emptyList() else lines.map { "한국어 $it" }
+            }
+            val translator = RealtimeSubtitleTranslator(context, StandardTestDispatcher(testScheduler), { provider }, { false })
+            translator.playbackTick(file(srt(3)).path, 100, backgroundScope, "gemini")
+            advanceTimeBy(60000); runCurrent()
+            assertEquals(if (quota) 1 else 4, provider.calls)
+            assertEquals(if (quota) 0 else 3, translator.playbackProgress().completed)
+            translator.clear()
+        }
     }
     @Test fun reserveRequestsTheNextCueBeforeItStartsEvenWithLookAheadOff() = runTest {
         context.getSharedPreferences("lilac_offline_store", 0).edit().putBoolean("pref_ai_prefetch_enabled", false).commit()

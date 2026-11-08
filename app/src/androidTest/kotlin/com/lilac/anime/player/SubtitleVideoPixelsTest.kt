@@ -1,6 +1,10 @@
 package com.lilac.anime.player
 
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
@@ -11,6 +15,8 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /** Actual mpv TextureView pixels over a black video, not just sub-text. */
 @RunWith(AndroidJUnit4::class)
@@ -39,13 +45,39 @@ class SubtitleVideoPixelsTest {
         val projected = File(context.cacheDir, "pixel-track.ass")
         lateinit var engine: MpvPlayerEngine
         lateinit var surface: MpvPlayerSurfaceView
+        lateinit var window: android.view.Window
         val scenario = ActivityScenario.launch(SubtitleTestActivity::class.java)
         scenario.onActivity { activity ->
             engine = MpvPlayerEngine(activity)
             surface = MpvPlayerSurfaceView(activity, engine)
+            window = activity.window
             activity.setContentView(surface, FrameLayout.LayoutParams(640,360))
         }
-        suspend fun frame(): Bitmap = withContext(Dispatchers.Main) { surface.bitmap ?: error("Texture has no video frame") }
+        // Read the subtitle region asynchronously. TextureView.getBitmap copied
+        // the entire video synchronously on the UI thread (~1s in software),
+        // making it impossible to sample every 500ms cue at 2x playback.
+        // Keep the rendering size, >80/<20 pixel thresholds, every expected
+        // cue and the 10s playback deadline; only reduce capture overhead.
+        suspend fun frame(): Bitmap = withContext(Dispatchers.Main) {
+            suspendCancellableCoroutine { continuation ->
+                val location = IntArray(2)
+                surface.getLocationInWindow(location)
+                val height = minOf(64, surface.height)
+                val width = minOf(256, surface.width)
+                val left = location[0] + (surface.width - width) / 2
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val region = Rect(left, location[1] + surface.height - height,
+                    left + width, location[1] + surface.height)
+                PixelCopy.request(window, region, bitmap, { result ->
+                    if (!continuation.isActive) bitmap.recycle()
+                    else if (result == PixelCopy.SUCCESS) continuation.resume(bitmap)
+                    else {
+                        bitmap.recycle()
+                        continuation.resumeWithException(AssertionError("Subtitle PixelCopy failed: $result"))
+                    }
+                }, Handler(Looper.getMainLooper()))
+            }
+        }
         fun bright(bitmap: Bitmap): Int {
             val pixels=IntArray(bitmap.width*bitmap.height)
             bitmap.getPixels(pixels,0,bitmap.width,0,0,bitmap.width,bitmap.height)
@@ -57,11 +89,11 @@ class SubtitleVideoPixelsTest {
             var count = -1
             val matched = withTimeoutOrNull(8000) {
                 while (true) {
-                    delay(100)
                     last?.recycle()
                     last = frame()
                     count = bright(last!!)
                     if ((visible && count > 80) || (!visible && count < 20)) return@withTimeoutOrNull true
+                    delay(100)
                 }
                 @Suppress("UNREACHABLE_CODE")
                 false
@@ -112,6 +144,8 @@ class SubtitleVideoPixelsTest {
                         assertTrue("Missing translated cue $cue at $position", engine.getCurrentSubtitleText().contains("한국어 대사 Line $cue"))
                         val started = android.os.SystemClock.elapsedRealtime()
                         waitPixels(true,"translated-playing-$cue")
+                        assertTrue("Capture crossed cue $cue at ${engine.currentPosition}",
+                            engine.getCurrentSubtitleText().contains("한국어 대사 Line $cue"))
                         captureTimings += "cue=$cue position=$position->${engine.currentPosition} captureMs=${android.os.SystemClock.elapsedRealtime() - started}"
                         seen += cue
                     }

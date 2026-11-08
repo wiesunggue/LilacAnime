@@ -144,6 +144,147 @@ class PlayerSubtitleIntegrationTest {
     @Test fun delayedNextCueBuffersThenResumesInKoreanWithoutSourceFallback() = runBlocking<Unit> {
         runRealScreenScenario(true)
     }
+    @Test fun failureRetryHiddenSubtitlesAndBackNavigationKeepPlaybackUsable() = runBlocking<Unit> {
+        val broken = java.util.concurrent.atomic.AtomicBoolean(true)
+        val requests = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val provider = object : TranslationProvider {
+            override val id = "gemini"
+            override val displayName = "recoverable fixture"
+            override suspend fun translateBatch(lines: List<String>): List<String> {
+                requests.addAll(lines)
+                if (broken.get() && lines.any { it.endsWith("1") }) error("HTTP 401 fixture key rejected")
+                return lines.map { "복구된 한국어 ${it.substringAfterLast(' ')}" }
+            }
+        }
+        withRecoveryPlayer(provider) { engine, left ->
+            compose.runOnUiThread { engine.pause(); engine.seekTo(500) }
+            waitText("복구된 한국어 0")
+            val earlier = waitFrame("recovery-first-cue") { true }
+            compose.runOnUiThread { engine.seekTo(10500); engine.play() }
+            compose.waitUntil(60000) { compose.onAllNodesWithText("번역 재시도").fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithText("번역 실패 · 재생 대기 중").assertIsDisplayed()
+            assertFalse(engine.isPlaying)
+            val failedCalls = requests.size
+            repeat(20) { compose.mainClock.advanceTimeBy(100); delay(100) }
+            assertEquals("Failures must not produce more requests without retry", failedCalls, requests.size)
+            compose.runOnUiThread { engine.pause() } // A real user pause revokes auto-resume.
+            broken.set(false)
+            compose.onNodeWithText("번역 재시도").performClick()
+            waitText("복구된 한국어 1")
+            waitFrame("recovery-after-retry") { !it.samePixels(earlier) }
+            assertFalse("Retry cannot override the user's pause", engine.isPlaying)
+            assertEquals(1, requests.count { it.endsWith("0") })
+            compose.runOnUiThread { engine.seekTo(500) }
+            waitText("복구된 한국어 0")
+            waitFrame("recovery-rewind-retains-first") { it.samePixels(earlier) }
+
+            settings()
+            compose.onNodeWithContentDescription("자막 표시").performScrollTo().performClick()
+            repeat(3) { compose.mainClock.advanceTimeBy(100); delay(100) }
+            val hiddenCalls = requests.size
+            compose.runOnUiThread { engine.seekTo(20500); engine.play() }
+            compose.waitUntil(15000) { engine.currentPosition > 21500 }
+            assertEquals("Hidden subtitles must not request the newly reached cue", hiddenCalls, requests.size)
+            assertEquals("Native subtitle pixels must be hidden", 0, capture("recovery-subtitles-hidden"))
+            compose.onNodeWithContentDescription("자막 표시").performClick()
+            waitText("복구된 한국어 2")
+            compose.runOnUiThread { engine.pause() }
+            waitFrame("recovery-subtitles-enabled") { true }
+            androidx.test.espresso.Espresso.pressBack()
+            compose.waitForIdle()
+            assertEquals("Back closes settings before leaving playback", 0, left.get())
+            assertSame(engine, MpvPlaybackManager.currentEngineOrNull())
+            compose.onAllNodesWithText("선택한 파일 표시 방식").assertCountEquals(0)
+            androidx.test.espresso.Espresso.pressBack()
+            compose.waitUntil(5000) { left.get() == 1 }
+        }
+    }
+
+    @Test fun nextEpisodeKeepsAiModeAndRejectsThePreviousEpisodesLateResponse() = runBlocking<Unit> {
+        val late = CompletableDeferred<Unit>()
+        val started = java.util.concurrent.atomic.AtomicBoolean(false)
+        val provider = object : TranslationProvider {
+            override val id = "gemini"
+            override val displayName = "late episode fixture"
+            override suspend fun translateBatch(lines: List<String>): List<String> {
+                if (lines.any { it == "Episode1 1" }) {
+                    started.set(true)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { late.await() }
+                    return lines.map { "이전 회차 늦은 결과" }
+                }
+                return lines.map { "회차 한국어 $it" }
+            }
+        }
+        try {
+            withRecoveryPlayer(provider, episodeCount = 2) { old, _ ->
+                compose.runOnUiThread { old.pause(); old.seekTo(10500) }
+                compose.waitUntil(60000) { started.get() }
+                if (compose.onAllNodesWithContentDescription("다음 화").fetchSemanticsNodes().isEmpty()) {
+                    compose.onRoot().performTouchInput { click() }
+                }
+                compose.onNodeWithContentDescription("다음 화").performClick()
+                compose.waitUntil(60000) { MpvPlaybackManager.currentEngineOrNull()?.let { it !== old && it.playbackState == MpvPlayerEngine.STATE_READY } == true }
+                val next = requireNotNull(MpvPlaybackManager.currentEngineOrNull())
+                compose.runOnUiThread { next.pause(); next.seekTo(500) }
+                waitText("회차 한국어 Episode2 0")
+                val translated = waitFrame("episode-two-auto-translated") { true }
+                late.complete(Unit)
+                repeat(10) { compose.mainClock.advanceTimeBy(100); delay(100) }
+                assertSame(next, MpvPlaybackManager.currentEngineOrNull())
+                assertFalse(next.isPlaying)
+                assertFalse(File(next.currentSubtitleFilePath!!).readText().contains("이전 회차 늦은 결과"))
+                waitFrame("episode-two-after-late-response") { it.samePixels(translated) }
+            }
+        } finally { late.complete(Unit) }
+    }
+
+    private suspend fun withRecoveryPlayer(
+        provider: TranslationProvider,
+        episodeCount: Int = 1,
+        block: suspend (MpvPlayerEngine, java.util.concurrent.atomic.AtomicInteger) -> Unit,
+    ) {
+        val ins = InstrumentationRegistry.getInstrumentation()
+        val context = ins.targetContext
+        AppContextHolder.init(context)
+        context.getSharedPreferences("lilac_offline_store", 0).edit()
+            .putBoolean("pref_ai_prefetch_enabled", true).putInt("pref_ai_prefetch_ahead", 0).commit()
+        val animeId = "player-recovery-fixture"
+        val episodes = (1..episodeCount).map { Episode(it.toString(), it, "복구 검사 $it") }
+        val files = mutableListOf<File>()
+        for (episode in episodes) {
+            val video = MpvOfflineStore.videoFile(context, animeId, episode.id).apply { parentFile!!.mkdirs() }
+            ins.context.assets.open("player-black.mp4").use { input -> video.outputStream().use { input.copyTo(it) } }
+            val source = File(context.cacheDir, "recovery_ep_${episode.id}_linkkf.srt").apply {
+                writeText((0..3).joinToString("\n\n") { cue ->
+                    "${cue+1}\n00:00:%02d,000 --> 00:00:%02d,000\n<font color=\"#00ff00\">Episode${episode.id} $cue</font>".format(cue * 10, (cue + 1) * 10)
+                })
+            }
+            SubtitleStore.save(context, animeId, episode.id, episode.number, "linkkf", source.path)
+            files += listOf(video, source)
+        }
+        SubtitleSelectionStore.clear(context, animeId)
+        val vm = ViewModelProvider(compose.activity)[AnimeViewModel::class.java]
+        compose.runOnUiThread {
+            vm.updatePlayerSettings(context, vm.playerSettings.copy(translationProvider = "gemini", subtitleSourcePreference = "linkkf",
+                subtitleSize = 100f, autoPlay = false, aiPrefetchEnabled = true, aiPrefetchAhead = 0))
+        }
+        val left = java.util.concurrent.atomic.AtomicInteger()
+        val anime = Anime(id = animeId, title = "복구 검사", source = "linkkf", episodes = episodes)
+        try {
+            compose.setContent { MaterialTheme { PlayerScreen(anime, episodes.first(), vm, { left.incrementAndGet() }, { _, _ -> provider }) } }
+            compose.waitUntil(60000) { compose.onAllNodesWithText("이 자막으로 재생").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(60000) { compose.onAllNodesWithText("자막 검색 중… 언제든 취소할 수 있습니다.").fetchSemanticsNodes().isEmpty() }
+            compose.onNode(isToggleable()).performClick()
+            compose.onNodeWithText("이 자막으로 재생").performClick()
+            compose.waitUntil(60000) { MpvPlaybackManager.currentEngineOrNull()?.playbackState == MpvPlayerEngine.STATE_READY }
+            block(requireNotNull(MpvPlaybackManager.currentEngineOrNull()), left)
+        } finally {
+            compose.runOnUiThread { compose.activity.setContentView(android.widget.FrameLayout(compose.activity)) }
+            files.forEach { it.delete() }
+            episodes.forEach { SubtitleStore.delete(context, animeId, it.id, it.number, "linkkf") }
+            SubtitleSelectionStore.clear(context, animeId)
+        }
+    }
     private suspend fun runRealScreenScenario(delayNextCue: Boolean) {
         val ins = InstrumentationRegistry.getInstrumentation()
         val context = ins.targetContext

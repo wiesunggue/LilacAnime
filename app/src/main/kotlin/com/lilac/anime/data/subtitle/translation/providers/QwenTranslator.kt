@@ -109,5 +109,5 @@ class QwenTranslator(private val context: Context) : TranslationProvider {
     }
 
     private fun apiError(code: Int, raw: String): Throwable { val msg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty(); return IllegalStateException("Qwen HTTP $code${if (msg.isNotBlank()) ": $msg" else ""}") }
-    private fun isSwitchable(t: Throwable) = t.message?.let { it.contains("HTTP 400") || it.contains("HTTP 404") || it.contains("HTTP 429") || it.contains("HTTP 500") || it.contains("HTTP 503") } == true
+    private fun isSwitchable(t: Throwable) = t.message?.let { it.contains("HTTP 400") || it.contains("HTTP 404") } == true
 }

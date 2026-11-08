@@ -2,6 +2,14 @@
 
 최신 확인일: 2026-11-08 (한국 시간). **이 문서는 작업 상태의 스냅샷이다. GitHub Actions의 과거 결과를 로컬 검사 결과와 혼동하지 않는다.**
 
+## 최신 개선: v16 (versionCode 45)
+
+[BUGFIX_V16.md](BUGFIX_V16.md)에 번역 요청 폭증(수정 전 인증 오류 300회/네트워크 오류 80회 재현), 오류 후 캐시 보존 재시도, 자막 숨김 중 새 요청 중단, 다음 회차 AI 모드 유지, SBV/MPL2/TTML 원문 노출, 잘못된 JSON 및 모바일 뒤로가기 개선을 기록했다.
+
+JVM **126개 전부 통과**. Android **서로 다른 25개 중 최신 결과 24개 통과, 1개 실패**이며 여러 실행의 합산이다. 실제 PlayerScreen의 색상·크기·연속 자막·오류 복구·회차 전환, HTTP/Keystore, 검색/다운로드 취소, 주요 화면 왕복과 실제 HOME→PiP→복귀 3회를 확인했다. **2배속/500ms 대사의 캡처는 대사 경계를 넘어 실패한 상태**다. 실제 유료 API/사용자 휴대폰/실스트림은 미검증이며 전체 검증 완료로 표현하지 않는다. 초기 검사 장치/에뮬레이터 실패와 실행 범위는 위 문서를 읽는다.
+
+사용자 요청대로 Codex 클라우드에서 직접 Gradle 빌드·기존 키 서명했다. 테스트한 x86 APK와 arm64 배포 APK의 DEX 18개가 동일하다. versionCode 45, APK SHA-256 `13fe8dc7ebe6b7db391754ace154caa08ea3cfaac66abfe61d3b1d658de35116`. 기존 앱 위에 업데이트한다. 소스는 `fix/subtitle-verified-v11`, [APK·검사 결과](https://github.com/wiesunggue/LilacAnime/tree/downloads/subtitle-check-v16)는 다운로드 전용 브랜치다. `main` 병합 없이 `[skip ci]`로 GitHub 자동 빌드를 건너뛴다. 최신 Actions API는 CONNECT 403으로 조회하지 못했다.
+
 ## 최신 개선: v15 (versionCode 44)
 
 [BUGFIX_V15.md](BUGFIX_V15.md)에 홈→PiP→전체 화면 복귀 시 엔진이 해제되는 문제의 원인·재현·수정을 기록했다. 사용자 요청에 따라 Codex 클라우드 안에서 직접 Gradle로 빌드·서명하며, 소스와 다운로드 커밋에 `[skip ci]`를 사용해 GitHub 자동 빌드를 건너뛴다. GitHub는 다운로드 배포에 사용한다. 소스 브랜치는 계속 `fix/subtitle-verified-v11`이며 기존 패키지/키를 유지한다.

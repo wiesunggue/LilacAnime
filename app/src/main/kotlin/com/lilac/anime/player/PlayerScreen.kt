@@ -302,6 +302,7 @@ fun PlayerScreen(
     }
     var translationTrackError by remember(currentEpisode.id, subtitleTranslationMode, localSubtitle) { mutableStateOf(false) }
     var translationWaiting by remember(currentEpisode.id, subtitleTranslationMode, localSubtitle) { mutableStateOf(false) }
+    var translationRetry by remember(currentEpisode.id, subtitleTranslationMode, localSubtitle) { mutableIntStateOf(0) }
     var translationSourcePath by remember(currentEpisode.id) { mutableStateOf<String?>(null) }
     var surfaceAttached by remember { mutableStateOf(false) }
     var vttOutlineWidth by rememberSaveable { mutableFloatStateOf(vm.playerSettings.vttOutlineWidth) }
@@ -324,7 +325,7 @@ fun PlayerScreen(
     var selectedInitialSubtitleKeys by remember(currentEpisode.id) { mutableStateOf<Set<String>>(emptySet()) }
     var selectedInitialSubtitlePath by remember(currentEpisode.id) { mutableStateOf<String?>(null) }
     var subtitleSelectionNeedsUserChoice by remember(currentEpisode.id) { mutableStateOf(true) }
-    var initialTranslationMode by remember(currentEpisode.id) { mutableStateOf("original") }
+    var initialTranslationMode by remember(currentEpisode.id) { mutableStateOf(subtitleTranslationMode) }
     var initialSubtitleTitle by remember(currentEpisode.id) { mutableStateOf(anime.title) }
     val initialSubtitleRequest = remember(currentEpisode.id) { LatestRequest(playerScope) }
     val manualSubtitleRequest = remember(currentEpisode.id) { LatestRequest(playerScope) }
@@ -564,6 +565,7 @@ fun PlayerScreen(
                 ?: com.lilac.anime.data.subtitle.translation.TranslationManager.createProvider(context, id)
         })
         var source = localSubtitle
+        var seenRetry = translationRetry
         val sessionEngine = engine
         val sessionEpisode = currentEpisode.id
         var track: TranslatedSubtitleTrack? = null
@@ -591,6 +593,11 @@ fun PlayerScreen(
         try {
             while (isActive) {
                 try {
+                    realtimeTranslator.setTranslationEnabled(subtitleEnabled)
+                    if (seenRetry != translationRetry) {
+                        seenRetry = translationRetry
+                        realtimeTranslator.retryFailedTranslations()
+                    }
                     if (source == null) source = engine.currentSubtitleFilePath?.takeIf { File(it).isFile }
                     source?.let { original ->
                         translationSourcePath = original
@@ -616,14 +623,14 @@ fun PlayerScreen(
                     buffer.update(translationWaiting)
                     Log.e("SubtitlePlayback", "TRANSLATED_TRACK_UPDATE_FAILED_KEEP_SOURCE", failure)
                 }
-                engine.setSubtitleVisible(subtitleEnabled)
+                sessionEngine.setSubtitleVisible(subtitleEnabled)
                 delay(100L)
             }
         } finally {
             withContext(NonCancellable) {
                 track?.close()
                 buffer.close()
-                engine.setSubtitleVisible(subtitleEnabled)
+                if (engine === sessionEngine) sessionEngine.setSubtitleVisible(subtitleEnabled)
                 realtimeTranslator.clear()
             }
         }
@@ -872,14 +879,12 @@ fun PlayerScreen(
     }
 
     BackHandler {
-        if (isTv) {
-            when {
-                settingsOpen -> settingsOpen = false
-                controlsVisible -> { controlsVisible = false }
-                else -> leave()
-            }
-        } else {
-            leave()
+        when {
+            settingsOpen -> settingsOpen = false
+            episodePickerOpen -> episodePickerOpen = false
+            shortcutHelpOpen -> shortcutHelpOpen = false
+            isTv && controlsVisible -> controlsVisible = false
+            else -> leave()
         }
     }
 
@@ -1099,7 +1104,7 @@ fun PlayerScreen(
         selectedInitialSubtitleKeys = emptySet()
         selectedInitialSubtitlePath = null
         subtitleSelectionNeedsUserChoice = true
-        initialTranslationMode = "original"
+        initialTranslationMode = subtitleTranslationMode
         initialSubtitleRequest.start {
             try {
                 val generation = playbackGeneration
@@ -2019,16 +2024,29 @@ fun PlayerScreen(
         )
         }
 
-        if (subtitleTranslationMode == "korean" && (controlsVisible || translationWaiting || translationProgress.error != null || translationTrackError)) {
+        if (subtitleEnabled && subtitleTranslationMode == "korean" && (controlsVisible || translationWaiting || translationProgress.error != null || translationTrackError)) {
+            val failed = translationTrackError || translationProgress.error != null
             val message = when {
-                translationTrackError || translationProgress.error != null -> "번역 실패 · 재생 대기 중 (원문 모드로 전환하거나 AI 설정 확인)"
+                failed -> if (translationWaiting) "번역 실패 · 재생 대기 중" else "번역 실패 · 완료된 자막으로 재생 중"
                 translationWaiting -> "다음 자막 번역 중 · 준비되면 이어서 재생합니다"
                 translationProgress.completed == 0 -> "번역 준비 중"
                 else -> "번역 ${translationProgress.completed}/${translationProgress.total}"
             }
-            Text(message, color = Color.White, fontSize = 11.sp,
-                modifier = Modifier.align(Alignment.TopStart).padding(top = 64.dp, start = 16.dp)
-                    .background(Color.Black.copy(alpha = .65f), RoundedCornerShape(6.dp)).padding(8.dp))
+            Column(Modifier.align(Alignment.TopStart).padding(top = 64.dp, start = 16.dp)
+                .widthIn(max = 360.dp).background(Color.Black.copy(alpha = .8f), RoundedCornerShape(6.dp)).padding(8.dp)) {
+                Text(message, color = Color.White, fontSize = 11.sp)
+                if (failed) {
+                    Text(translationProgress.error ?: "번역 자막을 불러오지 못했습니다.",
+                        color = Color.White.copy(.8f), fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row {
+                        TextButton(onClick = { translationRetry++ }) { Text("번역 재시도") }
+                        TextButton(onClick = {
+                            subtitleTranslationMode = "original"
+                            (localSubtitle ?: translationSourcePath)?.let { engine.replaceSubtitleTrack(it) }
+                        }) { Text("원문으로 계속") }
+                    }
+                }
+            }
         }
 
         LaunchedEffect(isTv, controlsVisible, settingsOpen) {
@@ -2681,6 +2699,7 @@ fun PlayerScreen(
                                 }
                                 Switch(
                                     checked = subtitleEnabled,
+                                    modifier = Modifier.semantics { contentDescription = "자막 표시" },
                                     onCheckedChange = {
                                         subtitleEnabled = it
                                         setSubtitleVisibleForMode(it)
@@ -2773,7 +2792,7 @@ fun PlayerScreen(
 
                             Spacer(Modifier.height(10.dp))
                             Text("선택한 파일 표시 방식", color = Color.White.copy(.72f), fontSize = 11.sp)
-                            Text("번역이 준비되지 않은 대사는 원문을 표시하며, 완료되면 번역으로 바뀝니다.", color = Color.White.copy(.65f), fontSize = 10.sp)
+                            Text("AI 번역은 다음 대사가 준비될 때까지 기다립니다. 실패하면 재시도하거나 원문으로 계속 볼 수 있습니다.", color = Color.White.copy(.65f), fontSize = 10.sp)
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp)

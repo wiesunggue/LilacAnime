@@ -156,6 +156,7 @@ class GeminiTranslator(
     private fun defaultModel(models: List<String>) = models.firstOrNull { it.contains("flash", true) && !it.contains("lite|preview".toRegex(RegexOption.IGNORE_CASE)) }
         ?: models.firstOrNull { it.contains("flash", true) } ?: models.first()
     private fun isBadRequest(t: Throwable) = t.message?.contains("HTTP 400") == true
-    private fun isSwitchable(t: Throwable) = t.message?.let { it.contains("HTTP 400") || it.contains("HTTP 404") || it.contains("HTTP 429") || it.contains("HTTP 503") } == true
+    // Rate limits/outages are retried by the coordinator, not once per model.
+    private fun isSwitchable(t: Throwable) = t.message?.let { it.contains("HTTP 400") || it.contains("HTTP 404") } == true
     private fun apiError(name: String, code: Int, raw: String): Throwable { val msg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty(); return IllegalStateException("$name HTTP $code${if (msg.isNotBlank()) ": $msg" else ""}") }
 }
