@@ -1,0 +1,54 @@
+{
+  "versionCode": 44,
+  "versionName": "0.4.1-alpha-15-subtitle-check",
+  "package": "com.lilac.anime.subtitlecheck",
+  "certificate_sha256": "9f1aa4a4b4557a2c5c8bd5e7aa79c15f36021a7d09b4203e42d098f591140927",
+  "apk_sha256": "5e291cc4d2143c2a6d8b78b8eec9adb202213fd05577a6a9ae2dbaf6e58b8709",
+  "bytes": 95969708,
+  "abi": "arm64-v8a",
+  "build": "Direct Gradle in Codex Cloud; source/download commits skip CI",
+  "jvm": {
+    "tests": 117,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "android": {
+    "tests": 5,
+    "state": "passed",
+    "failures": 0,
+    "runner": "real MainActivity HOME/PiP/system expand; real PlayerScreen/TextureView/libmpv; deterministic provider",
+    "checks": [
+      "ASS original green size100->180; translated ASS green at 180",
+      "window mode changes retain mounted native engine",
+      "HOME and system PiP expand repeated three times",
+      "same engine and media load generation",
+      "playing state and position retained",
+      "full-size restored green Korean pixels",
+      "delayed next cue buffers and automatically resumes",
+      "five later Korean cues and rewind pixels",
+      "paused translated frame differs from original pixels",
+      "original/translated toggle returns identical translated pixels",
+      "all five later cues have changed green pixels and matching native text",
+      "rewind rendered pixels exactly match the initial translated frame"
+    ],
+    "system_pip_seconds": 119.117,
+    "latest_test_methods_passed": [
+      "assSizeSliderScalesRealPixelsWithoutReplacingScriptColour",
+      "delayedNextCueBuffersThenResumesInKoreanWithoutSourceFallback",
+      "homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels",
+      "realScreenRetainsColourResizesDuringTranslationAndKeepsLaterCues",
+      "windowModeChangesDoNotReleaseTheMountedPlayer"
+    ],
+    "execution": "Four unchanged methods passed in full run; actual PiP method passed its targeted rerun after correcting test harness window/menu interaction. Application APK unchanged.",
+    "log": "v15-device-final.log: four unchanged methods passed; v15-pip-system-final.log: corrected WM helper, OK (1 test)",
+    "initial_harness_failure": "API 29 AccessibilityWindowInfo omitted PiP flag; test now reads WindowManager bounds; application APK unchanged"
+  },
+  "unverified": [
+    "paid APIs",
+    "user device and other Android versions",
+    "old 2x/500ms capture test"
+  ],
+  "source_commit": "29094fa046aac95d9232cde61dac8dd89f9c35c5",
+  "download_url": "https://github.com/wiesunggue/LilacAnime/raw/refs/heads/downloads/subtitle-check-v15/LilacAnime-v15-arm64.apk"
+}
