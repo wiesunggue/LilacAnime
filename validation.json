@@ -1,0 +1,229 @@
+{
+  "version_name": "0.4.1-alpha-16-subtitle-check",
+  "version_code": 45,
+  "package": "com.lilac.anime.subtitlecheck",
+  "abi": [
+    "arm64-v8a"
+  ],
+  "bytes": 95986092,
+  "apk_sha256": "13fe8dc7ebe6b7db391754ace154caa08ea3cfaac66abfe61d3b1d658de35116",
+  "certificate_sha256": "9f1aa4a4b4557a2c5c8bd5e7aa79c15f36021a7d09b4203e42d098f591140927",
+  "source_commit": "98b5d4b434824fc5a8a54e267b67aa3f15579097",
+  "download_url": "https://github.com/wiesunggue/LilacAnime/raw/refs/heads/downloads/subtitle-check-v16/LilacAnime-v16-arm64.apk",
+  "build": "Direct Gradle build and existing-key signing inside Codex Cloud; no GitHub Actions build. Source and artifact commits use [skip ci].",
+  "unit": {
+    "tests": 126,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "before_fix": {
+    "tests": 3,
+    "failed": 3,
+    "authentication_requests": {
+      "expected": 1,
+      "actual": 300
+    },
+    "network_failure_requests": {
+      "expected": 3,
+      "actual": 80
+    },
+    "pending_sbv_original_leaked": true,
+    "request_counts_use_virtual_time_and_fixture_provider": true
+  },
+  "android": {
+    "latest_distinct_methods": 25,
+    "latest_passed": 24,
+    "latest_failed": 1,
+    "single_full_suite_pass": false,
+    "runs": [
+      {
+        "log": "v16-device-regression.log",
+        "sha256": "c65ea6c62f5d8e7edd9f07ab8cc3937b4342881864f7ddfcb8edf18ae6c639dd",
+        "tests": 24,
+        "passed": 21,
+        "failed": 3
+      },
+      {
+        "log": "v16-device-followup.log",
+        "sha256": "abbb8c0baddb27fd8d02c6921c9bc2490c3cc34e0ea7ecec221c304412aef6ed",
+        "tests": 4,
+        "passed": 2,
+        "failed": 2
+      },
+      {
+        "log": "v16-device-final-targeted.log",
+        "sha256": "98a1df75a7ceb99cff817f654db292665a13f6798dd204f372621f2c818bfb5c",
+        "tests": 2,
+        "passed": 1,
+        "failed": 1
+      }
+    ],
+    "latest_results": [
+      {
+        "class": "com.lilac.anime.player.AppNavigationSmokeTest",
+        "method": "homeHistoryLibrarySettingsAndDownloadsRemainNavigable",
+        "status": "passed",
+        "log": "v16-device-final-targeted.log"
+      },
+      {
+        "class": "com.lilac.anime.player.NativeTranslationTrackTest",
+        "method": "nativeTrackDisplaysPendingSourceThenTranslationAndRewind",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PipPlaybackIntegrationTest",
+        "method": "windowModeChangesDoNotReleaseTheMountedPlayer",
+        "status": "passed",
+        "log": "v16-device-followup.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PipPlaybackIntegrationTest",
+        "method": "homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels",
+        "status": "passed",
+        "log": "v16-device-followup.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PlayerSubtitleIntegrationTest",
+        "method": "nextEpisodeKeepsAiModeAndRejectsThePreviousEpisodesLateResponse",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PlayerSubtitleIntegrationTest",
+        "method": "delayedNextCueBuffersThenResumesInKoreanWithoutSourceFallback",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PlayerSubtitleIntegrationTest",
+        "method": "assSizeSliderScalesRealPixelsWithoutReplacingScriptColour",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PlayerSubtitleIntegrationTest",
+        "method": "realScreenRetainsColourResizesDuringTranslationAndKeepsLaterCues",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.PlayerSubtitleIntegrationTest",
+        "method": "failureRetryHiddenSubtitlesAndBackNavigationKeepPlaybackUsable",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitleMarkupAndroidTest",
+        "method": "oldJvmOnlyPatternFailsOnAndroidAndProductionPatternWorks",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitlePlaybackClockTest",
+        "method": "mpvPlaybackContinuesTranslatingWithTheOriginalTrackHidden",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitleRenderingTest",
+        "method": "thirtyCuesRenderThenSeekAndClearWithoutNativeSubtitleEvents",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitleSelectionUiTest",
+        "method": "onlyOneFileIsSelectedAndTranslationDoesNotSelectAnother",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitleSelectionUiTest",
+        "method": "cancelIsClickableDuringSearch",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitleSelectionUiTest",
+        "method": "backCancelsDuringDownload",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationFailureHttpTest",
+        "method": "deepLAuthenticationErrorSendsOnlyOneHttpRequest",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationFailureHttpTest",
+        "method": "geminiOutageHasThreeRequestsAndExplicitRetryRecovers",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationHttpIntegrationTest",
+        "method": "realHttpErrorIsDisplayedInTheResultDialog",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationHttpIntegrationTest",
+        "method": "buttonReadsEncryptedKeyMakesHttpRequestParsesResponseAndShowsKorean",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationTestUiTest",
+        "method": "unchangedLocalOutputIsReportedAsFailure",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationTestUiTest",
+        "method": "delayedSuccessIsShownInDialog",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationTestUiTest",
+        "method": "hungRequestCanBeCancelled",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationTestUiTest",
+        "method": "failureIsVisibleAndRetryIsEnabled",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.TranslationTestUiTest",
+        "method": "timeoutShowsErrorRatherThanSilentlyResetting",
+        "status": "passed",
+        "log": "v16-device-regression.log"
+      },
+      {
+        "class": "com.lilac.anime.player.SubtitleVideoPixelsTest",
+        "method": "translatedPixelsSurvivePlaybackSeekAndVisibilityToggle",
+        "status": "failed",
+        "log": "v16-device-final-targeted.log"
+      }
+    ],
+    "initial_aborted_run": "System UI ANR; own instrumentation was stopped. Not evidence of a Lilac app crash.",
+    "harness_corrections": "Navigation selects the labelled clickable Material tab instead of its decorative icon description. PiP waits for actual playing position before changing modes. PixelCopy crops subtitle region and checks the same cue before and after capture; thresholds, expected cues 2..7 and 10s deadline retained.",
+    "remaining_failure": "translatedPixelsSurvivePlaybackSeekAndVisibilityToggle: Capture crossed cue 2 at 3800. Every 500ms cue at 2x was not verified. Normal-speed PlayerScreen later cues 1..5 passed separately.",
+    "real_system_pip_cycles_passed": 3,
+    "device": "API 29 x86_64 software emulator, no KVM. GMS temporarily disabled in owned read-only emulator after repeated GMS/SystemUI ANRs. Google services/Cast not tested.",
+    "provider_http": "Actual Gemini and DeepL clients, Android Keystore and local MockWebServer; no paid provider requests.",
+    "tested_x86_and_delivered_arm64_identical_dex_files": 18
+  },
+  "limitations": [
+    "Actual user phone and other Android versions were not tested.",
+    "Paid APIs, account-specific models and external anime streams were not tested.",
+    "Remote catalog/search/download success was not verified; navigation and cancellation were tested.",
+    "One fast-subtitle capture test still fails; this is not a claim that all bugs are fixed.",
+    "Latest GitHub Actions status could not be read: proxy CONNECT 403."
+  ]
+}

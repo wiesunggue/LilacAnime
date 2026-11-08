@@ -1,0 +1,92 @@
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.AppNavigationSmokeTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=2
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.AppNavigationSmokeTest:
+INSTRUMENTATION_STATUS: test=homeHistoryLibrarySettingsAndDownloadsRemainNavigable
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.AppNavigationSmokeTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=2
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=homeHistoryLibrarySettingsAndDownloadsRemainNavigable
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleVideoPixelsTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=2
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.SubtitleVideoPixelsTest:
+INSTRUMENTATION_STATUS: test=translatedPixelsSurvivePlaybackSeekAndVisibilityToggle
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleVideoPixelsTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=2
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Capture crossed cue 2 at 3800
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.lilac.anime.player.SubtitleVideoPixelsTest$translatedPixelsSurvivePlaybackSeekAndVisibilityToggle$1$14.invokeSuspend(SubtitleVideoPixelsTest.kt:147)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.internal.ScopeCoroutine.afterResume(Scopes.kt:35)
+	at kotlinx.coroutines.AbstractCoroutine.resumeWith(AbstractCoroutine.kt:101)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:46)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.SubtitleVideoPixelsTest.translatedPixelsSurvivePlaybackSeekAndVisibilityToggle(SubtitleVideoPixelsTest.kt:24)
+
+INSTRUMENTATION_STATUS: stream=
+Error in translatedPixelsSurvivePlaybackSeekAndVisibilityToggle(com.lilac.anime.player.SubtitleVideoPixelsTest):
+java.lang.AssertionError: Capture crossed cue 2 at 3800
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.lilac.anime.player.SubtitleVideoPixelsTest$translatedPixelsSurvivePlaybackSeekAndVisibilityToggle$1$14.invokeSuspend(SubtitleVideoPixelsTest.kt:147)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.internal.ScopeCoroutine.afterResume(Scopes.kt:35)
+	at kotlinx.coroutines.AbstractCoroutine.resumeWith(AbstractCoroutine.kt:101)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:46)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.SubtitleVideoPixelsTest.translatedPixelsSurvivePlaybackSeekAndVisibilityToggle(SubtitleVideoPixelsTest.kt:24)
+
+INSTRUMENTATION_STATUS: test=translatedPixelsSurvivePlaybackSeekAndVisibilityToggle
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 115.118
+There was 1 failure:
+1) translatedPixelsSurvivePlaybackSeekAndVisibilityToggle(com.lilac.anime.player.SubtitleVideoPixelsTest)
+java.lang.AssertionError: Capture crossed cue 2 at 3800
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.lilac.anime.player.SubtitleVideoPixelsTest$translatedPixelsSurvivePlaybackSeekAndVisibilityToggle$1$14.invokeSuspend(SubtitleVideoPixelsTest.kt:147)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.internal.ScopeCoroutine.afterResume(Scopes.kt:35)
+	at kotlinx.coroutines.AbstractCoroutine.resumeWith(AbstractCoroutine.kt:101)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:46)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.SubtitleVideoPixelsTest.translatedPixelsSurvivePlaybackSeekAndVisibilityToggle(SubtitleVideoPixelsTest.kt:24)
+
+FAILURES!!!
+Tests run: 2,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

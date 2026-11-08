@@ -1,0 +1,474 @@
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.AppNavigationSmokeTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.AppNavigationSmokeTest:
+INSTRUMENTATION_STATUS: test=homeHistoryLibrarySettingsAndDownloadsRemainNavigable
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.AppNavigationSmokeTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stack=androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 60000 ms
+	at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:755)
+	at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:362)
+	at com.lilac.anime.player.AppNavigationSmokeTest.homeHistoryLibrarySettingsAndDownloadsRemainNavigable(AppNavigationSmokeTest.kt:20)
+
+INSTRUMENTATION_STATUS: stream=
+Error in homeHistoryLibrarySettingsAndDownloadsRemainNavigable(com.lilac.anime.player.AppNavigationSmokeTest):
+androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 60000 ms
+	at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:755)
+	at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:362)
+	at com.lilac.anime.player.AppNavigationSmokeTest.homeHistoryLibrarySettingsAndDownloadsRemainNavigable(AppNavigationSmokeTest.kt:20)
+
+INSTRUMENTATION_STATUS: test=homeHistoryLibrarySettingsAndDownloadsRemainNavigable
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.NativeTranslationTrackTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.NativeTranslationTrackTest:
+INSTRUMENTATION_STATUS: test=nativeTrackDisplaysPendingSourceThenTranslationAndRewind
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.NativeTranslationTrackTest
+INSTRUMENTATION_STATUS: current=2
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=nativeTrackDisplaysPendingSourceThenTranslationAndRewind
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PipPlaybackIntegrationTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.PipPlaybackIntegrationTest:
+INSTRUMENTATION_STATUS: test=windowModeChangesDoNotReleaseTheMountedPlayer
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PipPlaybackIntegrationTest
+INSTRUMENTATION_STATUS: current=3
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: PiP must preserve playing state
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.runPlayerScenario(PipPlaybackIntegrationTest.kt:164)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.access$runPlayerScenario(PipPlaybackIntegrationTest.kt:37)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest$runPlayerScenario$1.invokeSuspend(Unknown Source:15)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.windowModeChangesDoNotReleaseTheMountedPlayer(PipPlaybackIntegrationTest.kt:100)
+
+INSTRUMENTATION_STATUS: stream=
+Error in windowModeChangesDoNotReleaseTheMountedPlayer(com.lilac.anime.player.PipPlaybackIntegrationTest):
+java.lang.AssertionError: PiP must preserve playing state
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.runPlayerScenario(PipPlaybackIntegrationTest.kt:164)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.access$runPlayerScenario(PipPlaybackIntegrationTest.kt:37)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest$runPlayerScenario$1.invokeSuspend(Unknown Source:15)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.windowModeChangesDoNotReleaseTheMountedPlayer(PipPlaybackIntegrationTest.kt:100)
+
+INSTRUMENTATION_STATUS: test=windowModeChangesDoNotReleaseTheMountedPlayer
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PipPlaybackIntegrationTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PipPlaybackIntegrationTest
+INSTRUMENTATION_STATUS: current=4
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stack=androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 30000 ms
+	at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:755)
+	at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:362)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.expandPipFromSystemControls(PipPlaybackIntegrationTest.kt:63)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.runPlayerScenario(PipPlaybackIntegrationTest.kt:158)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.access$runPlayerScenario(PipPlaybackIntegrationTest.kt:37)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest$runPlayerScenario$1.invokeSuspend(Unknown Source:15)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels(PipPlaybackIntegrationTest.kt:96)
+
+INSTRUMENTATION_STATUS: stream=
+Error in homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels(com.lilac.anime.player.PipPlaybackIntegrationTest):
+androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 30000 ms
+	at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:755)
+	at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:362)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.expandPipFromSystemControls(PipPlaybackIntegrationTest.kt:63)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.runPlayerScenario(PipPlaybackIntegrationTest.kt:158)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.access$runPlayerScenario(PipPlaybackIntegrationTest.kt:37)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest$runPlayerScenario$1.invokeSuspend(Unknown Source:15)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels(PipPlaybackIntegrationTest.kt:96)
+
+INSTRUMENTATION_STATUS: test=homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.PlayerSubtitleIntegrationTest:
+INSTRUMENTATION_STATUS: test=nextEpisodeKeepsAiModeAndRejectsThePreviousEpisodesLateResponse
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=5
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=nextEpisodeKeepsAiModeAndRejectsThePreviousEpisodesLateResponse
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=delayedNextCueBuffersThenResumesInKoreanWithoutSourceFallback
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=6
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=delayedNextCueBuffersThenResumesInKoreanWithoutSourceFallback
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=7
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=assSizeSliderScalesRealPixelsWithoutReplacingScriptColour
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=7
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=assSizeSliderScalesRealPixelsWithoutReplacingScriptColour
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=8
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=realScreenRetainsColourResizesDuringTranslationAndKeepsLaterCues
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=8
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=realScreenRetainsColourResizesDuringTranslationAndKeepsLaterCues
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=9
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=failureRetryHiddenSubtitlesAndBackNavigationKeepPlaybackUsable
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.PlayerSubtitleIntegrationTest
+INSTRUMENTATION_STATUS: current=9
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=failureRetryHiddenSubtitlesAndBackNavigationKeepPlaybackUsable
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleMarkupAndroidTest
+INSTRUMENTATION_STATUS: current=10
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.SubtitleMarkupAndroidTest:
+INSTRUMENTATION_STATUS: test=oldJvmOnlyPatternFailsOnAndroidAndProductionPatternWorks
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleMarkupAndroidTest
+INSTRUMENTATION_STATUS: current=10
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=oldJvmOnlyPatternFailsOnAndroidAndProductionPatternWorks
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitlePlaybackClockTest
+INSTRUMENTATION_STATUS: current=11
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.SubtitlePlaybackClockTest:
+INSTRUMENTATION_STATUS: test=mpvPlaybackContinuesTranslatingWithTheOriginalTrackHidden
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitlePlaybackClockTest
+INSTRUMENTATION_STATUS: current=11
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=mpvPlaybackContinuesTranslatingWithTheOriginalTrackHidden
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleRenderingTest
+INSTRUMENTATION_STATUS: current=12
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.SubtitleRenderingTest:
+INSTRUMENTATION_STATUS: test=thirtyCuesRenderThenSeekAndClearWithoutNativeSubtitleEvents
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleRenderingTest
+INSTRUMENTATION_STATUS: current=12
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=thirtyCuesRenderThenSeekAndClearWithoutNativeSubtitleEvents
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleSelectionUiTest
+INSTRUMENTATION_STATUS: current=13
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.SubtitleSelectionUiTest:
+INSTRUMENTATION_STATUS: test=onlyOneFileIsSelectedAndTranslationDoesNotSelectAnother
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleSelectionUiTest
+INSTRUMENTATION_STATUS: current=13
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=onlyOneFileIsSelectedAndTranslationDoesNotSelectAnother
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleSelectionUiTest
+INSTRUMENTATION_STATUS: current=14
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=cancelIsClickableDuringSearch
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleSelectionUiTest
+INSTRUMENTATION_STATUS: current=14
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=cancelIsClickableDuringSearch
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleSelectionUiTest
+INSTRUMENTATION_STATUS: current=15
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=backCancelsDuringDownload
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.SubtitleSelectionUiTest
+INSTRUMENTATION_STATUS: current=15
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=backCancelsDuringDownload
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationFailureHttpTest
+INSTRUMENTATION_STATUS: current=16
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.TranslationFailureHttpTest:
+INSTRUMENTATION_STATUS: test=deepLAuthenticationErrorSendsOnlyOneHttpRequest
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationFailureHttpTest
+INSTRUMENTATION_STATUS: current=16
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=deepLAuthenticationErrorSendsOnlyOneHttpRequest
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationFailureHttpTest
+INSTRUMENTATION_STATUS: current=17
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=geminiOutageHasThreeRequestsAndExplicitRetryRecovers
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationFailureHttpTest
+INSTRUMENTATION_STATUS: current=17
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=geminiOutageHasThreeRequestsAndExplicitRetryRecovers
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationHttpIntegrationTest
+INSTRUMENTATION_STATUS: current=18
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.TranslationHttpIntegrationTest:
+INSTRUMENTATION_STATUS: test=realHttpErrorIsDisplayedInTheResultDialog
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationHttpIntegrationTest
+INSTRUMENTATION_STATUS: current=18
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=realHttpErrorIsDisplayedInTheResultDialog
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationHttpIntegrationTest
+INSTRUMENTATION_STATUS: current=19
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=buttonReadsEncryptedKeyMakesHttpRequestParsesResponseAndShowsKorean
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationHttpIntegrationTest
+INSTRUMENTATION_STATUS: current=19
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=buttonReadsEncryptedKeyMakesHttpRequestParsesResponseAndShowsKorean
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=20
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+com.lilac.anime.player.TranslationTestUiTest:
+INSTRUMENTATION_STATUS: test=unchangedLocalOutputIsReportedAsFailure
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=20
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=unchangedLocalOutputIsReportedAsFailure
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=21
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=delayedSuccessIsShownInDialog
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=21
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=delayedSuccessIsShownInDialog
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=22
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=hungRequestCanBeCancelled
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=22
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=hungRequestCanBeCancelled
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=23
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=failureIsVisibleAndRetryIsEnabled
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=23
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=failureIsVisibleAndRetryIsEnabled
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=24
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=
+INSTRUMENTATION_STATUS: test=timeoutShowsErrorRatherThanSilentlyResetting
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.lilac.anime.player.TranslationTestUiTest
+INSTRUMENTATION_STATUS: current=24
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=24
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=timeoutShowsErrorRatherThanSilentlyResetting
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 801.058
+There were 3 failures:
+1) homeHistoryLibrarySettingsAndDownloadsRemainNavigable(com.lilac.anime.player.AppNavigationSmokeTest)
+androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 60000 ms
+	at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:755)
+	at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:362)
+	at com.lilac.anime.player.AppNavigationSmokeTest.homeHistoryLibrarySettingsAndDownloadsRemainNavigable(AppNavigationSmokeTest.kt:20)
+2) windowModeChangesDoNotReleaseTheMountedPlayer(com.lilac.anime.player.PipPlaybackIntegrationTest)
+java.lang.AssertionError: PiP must preserve playing state
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.runPlayerScenario(PipPlaybackIntegrationTest.kt:164)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.access$runPlayerScenario(PipPlaybackIntegrationTest.kt:37)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest$runPlayerScenario$1.invokeSuspend(Unknown Source:15)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.windowModeChangesDoNotReleaseTheMountedPlayer(PipPlaybackIntegrationTest.kt:100)
+3) homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels(com.lilac.anime.player.PipPlaybackIntegrationTest)
+androidx.compose.ui.test.ComposeTimeoutException: Condition still not satisfied after 30000 ms
+	at androidx.compose.ui.test.AndroidComposeUiTestEnvironment$AndroidComposeUiTestImpl.waitUntil(ComposeUiTest.android.kt:755)
+	at androidx.compose.ui.test.junit4.AndroidComposeTestRule.waitUntil(AndroidComposeTestRule.android.kt:362)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.expandPipFromSystemControls(PipPlaybackIntegrationTest.kt:63)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.runPlayerScenario(PipPlaybackIntegrationTest.kt:158)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.access$runPlayerScenario(PipPlaybackIntegrationTest.kt:37)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest$runPlayerScenario$1.invokeSuspend(Unknown Source:15)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+	at kotlinx.coroutines.EventLoopImplBase.processNextEvent(EventLoop.common.kt:263)
+	at kotlinx.coroutines.BlockingCoroutine.joinBlocking(Builders.kt:94)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking(Builders.kt:70)
+	at kotlinx.coroutines.BuildersKt.runBlocking(Unknown Source:1)
+	at kotlinx.coroutines.BuildersKt__BuildersKt.runBlocking$default(Builders.kt:48)
+	at kotlinx.coroutines.BuildersKt.runBlocking$default(Unknown Source:1)
+	at com.lilac.anime.player.PipPlaybackIntegrationTest.homeAndRestoreKeepsTheSamePlayingEngineAndTranslatedPixels(PipPlaybackIntegrationTest.kt:96)
+
+FAILURES!!!
+Tests run: 24,  Failures: 3
+
+
+INSTRUMENTATION_CODE: -1
